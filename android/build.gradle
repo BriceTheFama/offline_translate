@@ -1,0 +1,85 @@
+// Packages ONNX Runtime's native library, and nothing else from it.
+//
+// The official `com.microsoft.onnxruntime:onnxruntime-android` AAR is not used
+// as a Gradle dependency on purpose. Its manifest contributes an
+// `ai.onnxruntime.TelemetryInitializer` ContentProvider — which builds an HTTP
+// client at application start — plus INTERNET and ACCESS_NETWORK_STATE
+// permissions, to every application that depends on it. A package whose whole
+// promise is "no network after installation" cannot ship that.
+//
+// Since this plugin talks to ONNX Runtime purely through dart:ffi, none of the
+// AAR's Java classes are needed. The AAR is therefore resolved as a plain file,
+// and only `libonnxruntime.so` is extracted into jniLibs: no manifest merge, no
+// permissions, no telemetry provider, no Java layer.
+
+group 'com.offlinetranslate.offline_translate'
+version '1.0'
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.0'
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: 'com.android.library'
+
+// Keep in sync with OrtLibrary.builtAgainstApiVersion and doc/onnx-runtime.md.
+def onnxRuntimeVersion = '1.29.0'
+
+configurations {
+    onnxRuntimeAar
+}
+
+dependencies {
+    onnxRuntimeAar "com.microsoft.onnxruntime:onnxruntime-android:${onnxRuntimeVersion}@aar"
+}
+
+def extractedJniDir = layout.buildDirectory.dir('onnxruntime-jni')
+
+tasks.register('extractOnnxRuntimeLibraries', Copy) {
+    description = 'Extracts libonnxruntime.so from the official ONNX Runtime AAR.'
+    from { configurations.onnxRuntimeAar.collect { zipTree(it) } }
+    include 'jni/**/libonnxruntime.so'
+    eachFile { it.path = it.path.replaceFirst('^jni/', '') }
+    includeEmptyDirs = false
+    into extractedJniDir
+}
+
+android {
+    namespace 'com.offlinetranslate.offline_translate'
+    compileSdk 35
+
+    defaultConfig {
+        // ONNX Runtime 1.29.0 requires API 24.
+        minSdk 24
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDir extractedJniDir
+        }
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name == 'preBuild' || task.name.startsWith('merge') &&
+            task.name.endsWith('JniLibFolders')) {
+        task.dependsOn tasks.named('extractOnnxRuntimeLibraries')
+    }
+}

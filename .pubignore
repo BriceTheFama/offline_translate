@@ -1,0 +1,10 @@
+# Test fixtures: 2 MB of tokenizer reference data, only needed to run the tests.
+test/fixtures/
+
+# ONNX Runtime headers, fetched by tool/fetch_onnxruntime.sh. They are only
+# needed to regenerate the FFI bindings, which are checked in.
+third_party/
+
+# Local build artefacts.
+build/
+.dart_tool/

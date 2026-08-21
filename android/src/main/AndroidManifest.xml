@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      Deliberately empty. This plugin ships ONNX Runtime's native library only,
+      so it adds no permissions, no components and no Java classes to the host
+      application. See android/build.gradle for why the official AAR is not
+      used as a dependency.
+    -->
+</manifest>

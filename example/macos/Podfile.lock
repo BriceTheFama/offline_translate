@@ -1,0 +1,29 @@
+PODS:
+  - FlutterMacOS (1.0.0)
+  - offline_translate (0.2.0):
+    - FlutterMacOS
+    - onnxruntime-c (= 1.29.0)
+  - onnxruntime-c (1.29.0)
+
+DEPENDENCIES:
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - offline_translate (from `Flutter/ephemeral/.symlinks/plugins/offline_translate/macos`)
+
+SPEC REPOS:
+  trunk:
+    - onnxruntime-c
+
+EXTERNAL SOURCES:
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  offline_translate:
+    :path: Flutter/ephemeral/.symlinks/plugins/offline_translate/macos
+
+SPEC CHECKSUMS:
+  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  offline_translate: 1de787c40338e022b2e6603ecbeec72108ba306e
+  onnxruntime-c: c0dec5145726abb39706aac7dff720d37549c7db
+
+PODFILE CHECKSUM: d16f5e5d196d1ca9863d7a71d5885cad7ffa7d2d
+
+COCOAPODS: 1.16.2

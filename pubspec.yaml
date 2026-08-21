@@ -1,0 +1,37 @@
+name: offline_translate
+description: >-
+  100% offline neural machine translation for Flutter. Runs OPUS-MT (MarianMT)
+  models locally with ONNX Runtime — no network access after the model is installed.
+version: 0.3.0
+repository: https://github.com/kouevidjinbrice/offline_translate
+issue_tracker: https://github.com/kouevidjinbrice/offline_translate/issues
+
+environment:
+  sdk: ^3.6.0
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+  path: ^1.9.0
+  path_provider: ^2.1.4
+  http: ^1.2.0
+  crypto: ^3.0.3
+  meta: ^1.15.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  ffigen: ^19.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
