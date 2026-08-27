@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:offline_translate/offline_translate.dart';
@@ -48,6 +49,8 @@ class _TranslatorPageState extends State<TranslatorPage> {
   InstallProgress? _progress;
   TranslationResult? _result;
   String _streamed = '';
+  bool? _online;
+  String _runtime = '';
 
   @override
   void initState() {
@@ -66,10 +69,12 @@ class _TranslatorPageState extends State<TranslatorPage> {
   Future<void> _bootstrap() async {
     try {
       final resolved = await DemoModelSources.resolve();
-      // Declaring the languages is what keeps the download small: this demo
-      // needs en and fr, so it is never asked for an es or de model.
+      // Every language the pickers offer has to be declared, or choosing one
+      // raises UnsupportedLanguageException. A real application declares only
+      // what it needs — that is the point of the parameter — and then never
+      // downloads the rest.
       final translator = await OfflineTranslator.initialize(
-        languages: const {Language.en, Language.fr},
+        languages: Language.values.toSet(),
         defaultLanguage: Language.fr,
         modelSource: resolved.source,
         cache: TranslationCache(maxEntries: 128),
@@ -78,7 +83,9 @@ class _TranslatorPageState extends State<TranslatorPage> {
       setState(() {
         _translator = translator;
         _sourceDescription = resolved.description;
+        _runtime = OfflineTranslator.onnxRuntimeVersion;
       });
+      unawaited(_checkNetwork());
       await _refreshModel();
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
@@ -115,6 +122,27 @@ class _TranslatorPageState extends State<TranslatorPage> {
 
   static String _mb(int bytes) => '${(bytes / 1048576).toStringAsFixed(1)} MB';
 
+  /// Is the network actually reachable right now?
+  ///
+  /// This is here so the offline demo is self-evident: install a model, turn on
+  /// airplane mode, tap refresh, watch this go red — and then translate anyway.
+  Future<void> _checkNetwork() async {
+    setState(() => _online = null);
+    var reachable = false;
+    try {
+      final socket = await Socket.connect(
+        'example.com',
+        443,
+        timeout: const Duration(seconds: 3),
+      );
+      socket.destroy();
+      reachable = true;
+    } catch (_) {
+      reachable = false;
+    }
+    if (mounted) setState(() => _online = reachable);
+  }
+
   Future<void> _install() async {
     final translator = _translator;
     if (translator == null) return;
@@ -134,7 +162,15 @@ class _TranslatorPageState extends State<TranslatorPage> {
       if (mounted) setState(() => _progress = null);
       await _refreshModel();
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) {
+        setState(
+          () => _error = e is ModelDownloadException
+              ? '$e\n\nNot every direction is published yet. Build one with '
+                    '`python3 tool/build_tiny_model.py --pair ${_pair.id}` and host '
+                    'it, or pick a direction that is available.'
+              : '$e',
+        );
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -354,8 +390,19 @@ class _TranslatorPageState extends State<TranslatorPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text('Model', style: theme.textTheme.titleMedium),
-                    const SizedBox(height: 4),
+                    Row(
+                      children: <Widget>[
+                        Text('Model', style: theme.textTheme.titleMedium),
+                        const Spacer(),
+                        _NetworkChip(online: _online),
+                        IconButton(
+                          onPressed: _checkNetwork,
+                          icon: const Icon(Icons.refresh, size: 18),
+                          tooltip: 'Re-check the network',
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
                     Text(_status),
                     Text(
                       'Source: $_sourceDescription',
@@ -363,11 +410,24 @@ class _TranslatorPageState extends State<TranslatorPage> {
                     ),
                     if (_model != null) ...<Widget>[
                       Text(
-                        'Base: ${_model!.baseModel} · ${_model!.license} · '
-                        '${_model!.quantization}',
+                        '${_model!.baseModel} · ${_model!.license} · '
+                        '${_model!.quantization} · '
+                        '${_model!.architecture.family.name}',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                      Text(
+                        '${_mb(_model!.size)} on disk · '
+                        '${_model!.architecture.decoderLayers} decoder layers · '
+                        'vocab ${_model!.architecture.vocabSize}',
                         style: theme.textTheme.bodySmall,
                       ),
                     ],
+                    Text(
+                      '${Platform.operatingSystem} · '
+                      '${Platform.numberOfProcessors} cores · '
+                      'ONNX Runtime $_runtime',
+                      style: theme.textTheme.bodySmall,
+                    ),
                     if (_progress != null) ...<Widget>[
                       const SizedBox(height: 8),
                       LinearProgressIndicator(value: _progress!.fraction),
@@ -398,6 +458,46 @@ class _TranslatorPageState extends State<TranslatorPage> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Whether the network is reachable *right now*, which is the whole point of
+/// the offline demo: install a model, switch the device to airplane mode, watch
+/// this turn red, and translate anyway.
+class _NetworkChip extends StatelessWidget {
+  const _NetworkChip({required this.online});
+
+  final bool? online;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (online == null) {
+      return const SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
+    final offline = !online!;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: offline
+            ? theme.colorScheme.tertiaryContainer
+            : theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        offline ? 'OFFLINE' : 'online',
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: offline
+              ? theme.colorScheme.onTertiaryContainer
+              : theme.colorScheme.onSurfaceVariant,
+          fontWeight: offline ? FontWeight.bold : FontWeight.normal,
         ),
       ),
     );

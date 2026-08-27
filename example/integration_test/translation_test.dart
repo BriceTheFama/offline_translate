@@ -15,8 +15,10 @@ import 'package:path_provider/path_provider.dart';
 ///   --dart-define=OT_MODELS_DIR=$HOME/ot-models
 /// ```
 ///
-/// On a phone, push the bundle to the app's documents directory instead and
-/// leave the define out.
+/// On a phone, leave the define out entirely: the suite falls back to
+/// `HttpModelSource.official()` and downloads the bundle on first run. To test
+/// without a network, push a bundle to the app's documents directory as
+/// `ot-models/<pair>/` instead.
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -35,10 +37,9 @@ void main() {
     if (remoteUrl.isNotEmpty) {
       return HttpModelSource(baseUrl: Uri.parse(remoteUrl));
     }
-    throw StateError(
-      'No model bundle found. Pass --dart-define=OT_MODELS_DIR=<path> or '
-      'push a bundle to ${docs.path}/ot-models.',
-    );
+    // Zero configuration: fall back to the published bundles, so this suite
+    // runs on a fresh device with nothing but a network connection.
+    return HttpModelSource.official();
   }
 
   setUpAll(() async {

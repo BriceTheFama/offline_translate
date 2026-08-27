@@ -472,11 +472,14 @@ measured on the OPUS-MT bundle and have not yet been re-run for this model.
 
 ```sh
 cd example
-flutter run --dart-define=OT_MODELS_DIR=$HOME/ot-models-tiny
+flutter run
 ```
 
-Language pickers with swap, model install with progress, all three translation
-APIs, timings, and the model's license shown from its manifest.
+No configuration: the app downloads the `en→fr` bundle from the published
+repository on first launch and keeps it. Language pickers with swap, install
+progress, all three translation APIs, timings, the model's licence read from its
+manifest, and a live network indicator — put the device in airplane mode, tap
+refresh, and translate anyway. See [example/README.md](example/README.md).
 
 ---
 
