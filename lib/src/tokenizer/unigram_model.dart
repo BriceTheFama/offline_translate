@@ -39,8 +39,11 @@ class UnigramSegmenter {
         unknownId = id;
         continue;
       }
-      // Control symbols and unused pieces never take part in segmentation.
-      if (type == SpmPieceType.control || type == SpmPieceType.unused) continue;
+      // `Model::Model` puts NORMAL, USER_DEFINED and UNUSED pieces in the
+      // trie and keeps CONTROL, UNKNOWN and BYTE out of it. Byte pieces matter
+      // here: a byte-fallback vocabulary carries 256 of them, and letting them
+      // be matched as text would segment a literal "<0x41>" into one token.
+      if (type == SpmPieceType.control || type == SpmPieceType.byte) continue;
       final piece = model.pieces[id];
       if (piece.isEmpty) continue;
       index[piece] = id;

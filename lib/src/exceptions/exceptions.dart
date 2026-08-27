@@ -1,3 +1,5 @@
+import '../core/language.dart';
+
 /// Base class for every error thrown by `offline_translate`.
 abstract class OfflineTranslatorException implements Exception {
   /// Creates an exception carrying a human readable [message].
@@ -38,13 +40,34 @@ class ModelNotLoadedException extends OfflineTranslatorException {
 }
 
 /// Thrown when a language direction has no model in the catalogue.
-class UnsupportedDirectionException extends OfflineTranslatorException {
+class UnsupportedLanguagePairException extends OfflineTranslatorException {
   /// Creates the exception for the unsupported [modelId].
-  const UnsupportedDirectionException(this.modelId)
+  const UnsupportedLanguagePairException(this.modelId)
       : super('No model is available for direction "$modelId".');
 
   /// Identifier of the unsupported direction, e.g. `fr-de`.
   final String modelId;
+}
+
+/// Thrown when a translation names a language the translator was not
+/// initialized with.
+///
+/// `OfflineTranslator.initialize(languages: ...)` declares the set an
+/// application needs, and asking for anything outside it is a programming
+/// error rather than a missing download — the point of declaring the set is
+/// that models for the rest are never required.
+class UnsupportedLanguageException extends OfflineTranslatorException {
+  /// Creates the exception for [language], listing what was declared.
+  UnsupportedLanguageException(this.language, this.declared)
+      : super('Language "${language.code}" was not declared at initialize(); '
+            'this translator serves '
+            '${declared.map((l) => l.code).join(", ")}.');
+
+  /// The language that was asked for.
+  final Language language;
+
+  /// The languages this translator was initialized with.
+  final Set<Language> declared;
 }
 
 /// Thrown when installed model files fail their integrity check.

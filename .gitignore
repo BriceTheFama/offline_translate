@@ -1,0 +1,31 @@
+# Dart / Flutter
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+doc/api/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Tooling
+tool/__pycache__/
+__pycache__/
+*.pyc
+.venv/
+
+# The ONNX Runtime *headers* are checked in: ffigen regenerates the bindings
+# from them, and pinning them is what makes that reproducible. The shared
+# library is not — it is 43 MB, it is fetched by tool/fetch_onnxruntime.sh, and
+# it is only needed to run the harness and the host tests. Applications get
+# ONNX Runtime from Gradle and CocoaPods instead.
+third_party/onnxruntime/lib/
+
+# Model bundles are built by tool/build_tiny_model.py and hosted separately.
+# 32 MB per direction does not belong in git.
+assets/models/
+*.onnx
+*.data

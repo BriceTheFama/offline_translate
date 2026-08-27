@@ -11,7 +11,8 @@ export 'src/core/generation_config.dart' show GenerationConfig;
 export 'src/core/language.dart' show Language, LanguagePair;
 export 'src/core/runtime_config.dart'
     show Accelerator, GraphOptimization, RuntimeConfig;
-export 'src/core/model_info.dart' show ModelArchitecture, ModelFile, ModelInfo;
+export 'src/core/model_info.dart'
+    show ModelArchitecture, ModelFamily, ModelFile, ModelInfo;
 export 'src/core/offline_translator.dart' show EngineFactory, OfflineTranslator;
 export 'src/core/translation_result.dart' show TranslationResult;
 export 'src/engine/translation_engine.dart'

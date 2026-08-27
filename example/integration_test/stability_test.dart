@@ -84,8 +84,8 @@ void main() {
     final manager = FileModelManager(source: source, rootPath: workDir.path);
     await manager.install(const LanguagePair(Language.en, Language.fr));
     translator = await OfflineTranslator.initialize(
-      from: Language.en,
-      to: Language.fr,
+      languages: const {Language.en, Language.fr},
+      defaultLanguage: Language.fr,
       modelManager: manager,
     );
   });
@@ -102,7 +102,7 @@ void main() {
     (tester) async {
       // Warm up so one-off allocator growth is not read as a leak.
       for (var i = 0; i < 5; i++) {
-        translator.translateSync(text: sentence);
+        translator.translate(sentence);
       }
       final baseline = rssMb();
       report.add('short translations: baseline $baseline MB');
@@ -111,7 +111,7 @@ void main() {
       var peak = baseline;
       final watch = Stopwatch()..start();
       for (var i = 1; i <= shortIterations; i++) {
-        final result = translator.translateSync(text: sentence);
+        final result = translator.translate(sentence);
         tokens += result.translatedText.length;
         final now = rssMb();
         if (now > peak) peak = now;
@@ -146,7 +146,7 @@ void main() {
   testWidgets('memory stays flat over $paragraphIterations paragraph '
       'translations', (tester) async {
     final document = paragraphs(300);
-    await translator.translate(text: document);
+    await translator.translateLong(document);
     final baseline = rssMb();
     report.add(
       'paragraph translations: baseline $baseline MB, '
@@ -156,7 +156,7 @@ void main() {
     var peak = baseline;
     final watch = Stopwatch()..start();
     for (var i = 1; i <= paragraphIterations; i++) {
-      await translator.translate(text: document);
+      await translator.translateLong(document);
       final now = rssMb();
       if (now > peak) peak = now;
       if (i == 5 || i == paragraphIterations) {
@@ -195,7 +195,7 @@ void main() {
       });
 
       final watch = Stopwatch()..start();
-      final result = await translator.translate(text: document);
+      final result = await translator.translateLong(document);
       watch.stop();
       ticker.cancel();
 
@@ -243,7 +243,7 @@ void main() {
       // documentation tells callers to avoid, and the numbers here are what that
       // warning is based on.
       final watch = Stopwatch()..start();
-      translator.translateSync(text: words(100));
+      translator.translate(words(100));
       watch.stop();
       await Future<void>.delayed(const Duration(milliseconds: 50));
       ticker.cancel();

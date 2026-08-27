@@ -4,14 +4,42 @@ import 'package:meta/meta.dart';
 
 import 'language.dart';
 
-/// Shape and special-token constants of a Marian encoder-decoder checkpoint.
+/// The decoder architectures this package can run.
 ///
-/// These come from the checkpoint's `config.json` and are frozen into the
-/// model manifest at build time so the engine never has to guess.
+/// The two families need different decoding loops, so the manifest records
+/// which one a bundle is, and the engine picks its runner from that rather than
+/// sniffing the graphs.
+enum ModelFamily {
+  /// OPUS-MT / MarianMT exported by optimum: a merged decoder with a growing
+  /// key/value cache and a `use_cache_branch` input.
+  marian,
+
+  /// Firefox Translations students: decoder self-attention replaced by an
+  /// SSRU, so the whole history is one small state per layer and one graph
+  /// serves every step.
+  tinySsru;
+
+  /// Parses the manifest spelling, defaulting to [marian] for bundles built
+  /// before the field existed.
+  static ModelFamily parse(String? name) => switch (name) {
+        null || 'marian' => ModelFamily.marian,
+        'tiny-ssru' => ModelFamily.tinySsru,
+        _ => throw FormatException('Unknown model family "$name"'),
+      };
+
+  /// The manifest spelling.
+  String get id => this == ModelFamily.marian ? 'marian' : 'tiny-ssru';
+}
+
+/// Shape and special-token constants of an encoder-decoder checkpoint.
+///
+/// These come from the checkpoint and are frozen into the model manifest at
+/// build time so the engine never has to guess.
 @immutable
 class ModelArchitecture {
   /// Creates an architecture description.
   const ModelArchitecture({
+    this.family = ModelFamily.marian,
     required this.decoderLayers,
     required this.decoderAttentionHeads,
     required this.headDimension,
@@ -22,7 +50,11 @@ class ModelArchitecture {
     required this.vocabSize,
   });
 
-  /// Number of decoder layers, i.e. the number of KV-cache entries.
+  /// Which decoding loop this model needs.
+  final ModelFamily family;
+
+  /// Number of decoder layers: the number of key/value cache entries for
+  /// [ModelFamily.marian], of recurrent states for [ModelFamily.tinySsru].
   final int decoderLayers;
 
   /// Number of decoder attention heads.
@@ -31,7 +63,9 @@ class ModelArchitecture {
   /// Size of a single attention head (`d_model / heads`).
   final int headDimension;
 
-  /// Token the decoder is primed with (Marian uses `<pad>`).
+  /// Token the decoder is primed with. OPUS-MT uses `<pad>`; the Firefox
+  /// students start from an all-zero embedding instead of any token, which the
+  /// manifest records as `-1`.
   final int decoderStartTokenId;
 
   /// End-of-sequence token that stops generation.
@@ -46,9 +80,13 @@ class ModelArchitecture {
   /// Size of the shared vocabulary.
   final int vocabSize;
 
+  /// `d_model`, the width of the hidden states.
+  int get modelDimension => decoderAttentionHeads * headDimension;
+
   /// Parses an architecture block from a manifest.
   factory ModelArchitecture.fromJson(Map<String, dynamic> json) =>
       ModelArchitecture(
+        family: ModelFamily.parse(json['family'] as String?),
         decoderLayers: json['decoder_layers'] as int,
         decoderAttentionHeads: json['decoder_attention_heads'] as int,
         headDimension: json['head_dimension'] as int,
@@ -61,6 +99,7 @@ class ModelArchitecture {
 
   /// Serialises the architecture block.
   Map<String, dynamic> toJson() => <String, dynamic>{
+        'family': family.id,
         'decoder_layers': decoderLayers,
         'decoder_attention_heads': decoderAttentionHeads,
         'head_dimension': headDimension,

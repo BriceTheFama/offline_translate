@@ -2,51 +2,93 @@
 
 ## What a model bundle is
 
-One bundle serves one direction. It is a directory of six files:
+One bundle serves one direction, and there are two families of them. Which one a
+bundle is, is recorded in its manifest as `architecture.family`; the engine reads
+that and picks its decoding loop from it, so both run side by side.
+
+### `tiny-ssru` — the default, from Firefox Translations
 
 ```text
 en-fr/
-├── manifest.json     1 KB    metadata, architecture constants, SHA-256 per file
-├── encoder.onnx    147 KB    graph only
-├── encoder.data     47 MB    int8 encoder weights, memory-mapped by ONNX Runtime
-├── decoder.onnx    518 KB    graph only (merged: first step + cached steps)
-├── decoder.data     54 MB    int8 decoder weights
-├── source.spm      760 KB    upstream SentencePiece model, unmodified
-└── vocab.json      1.4 MB    upstream shared vocabulary, unmodified
+├── manifest.json     3 KB    metadata, architecture constants, SHA-256 per file
+├── encoder.onnx    210 KB    graph only
+├── encoder.data     12 MB    int8 encoder weights, memory-mapped by ONNX Runtime
+├── decoder.onnx     84 KB    graph only — one graph for every decoding step
+├── decoder.data    7.2 MB    int8 decoder weights
+├── embedding.data   12 MB    the tied embedding, shared by both graphs
+└── source.spm      814 KB    upstream SentencePiece model, unmodified
 ```
 
-**≈ 104 MB per direction.** The `.spm` and `.json` files are byte-identical to
-the ones published by Helsinki-NLP, so a bundle can be audited against the
-upstream checksums.
+**32.3 MB per direction.** Three things about that list are deliberate:
 
-`manifest.json` looks like this:
+* **`embedding.data` is referenced by both graphs.** The tied matrix is 39 % of
+  the model, and it is stored transposed so that the source lookup, the target
+  lookup and the output projection are all served by one quantised copy. Storing
+  it per graph would make the bundle 43 MB.
+* **There is no `vocab.json`.** Marian uses the SentencePiece ids directly, so
+  the tokenizer builds the identity mapping from the `.spm` alone — 629 KB
+  saved, and one less derived artefact to audit.
+* **`decoder.onnx` is 84 KB and has no `If` node.** The decoder is an SSRU, so a
+  zero state is the first step; one graph serves the whole loop.
+
+The `.spm` is byte-identical to the file Mozilla publishes, so a bundle can be
+audited against the upstream checksum. The whole pipeline is reproducible: two
+clean runs of `tool/build_tiny_model.py` produce byte-identical `.onnx` and
+`.data` files.
 
 ```json
 {
   "from": "en",
   "to": "fr",
   "version": "1.0.0",
-  "checksum": "05c90e08…",
-  "base_model": "Helsinki-NLP/opus-mt-en-fr",
-  "license": "Apache-2.0",
+  "base_model": "mozilla/firefox-translations-models enfr",
+  "license": "MPL-2.0",
   "quantization": "int8",
   "architecture": {
-    "decoder_layers": 6,
+    "family": "tiny-ssru",
+    "decoder_layers": 4,
+    "encoder_layers": 6,
     "decoder_attention_heads": 8,
-    "head_dimension": 64,
-    "decoder_start_token_id": 59513,
+    "head_dimension": 48,
+    "model_dimension": 384,
+    "decoder_start_token_id": -1,
     "eos_token_id": 0,
-    "pad_token_id": 59513,
+    "pad_token_id": 0,
     "max_position_embeddings": 512,
-    "vocab_size": 59514
+    "vocab_size": 32000
   },
-  "files": [{ "name": "encoder.onnx", "size": 150236, "sha256": "e23400b8…" }]
+  "files": [{ "name": "encoder.onnx", "size": 215197, "sha256": "…" }],
+  "marian_config": "…the YAML Marian stores inside the checkpoint…"
 }
 ```
 
-The architecture block is read from the upstream `config.json` at build time, so
-the engine never hard-codes a shape or a special token. Pointing the build tool
-at a different Marian checkpoint is enough to support it.
+`decoder_start_token_id: -1` is not a token. Marian starts decoding from an
+all-zero embedding rather than a start-of-sequence symbol, and the exported
+graph turns any negative id into one — so the engine can drive the first step
+and every later step through the same input.
+
+`marian_config` is the architecture description copied verbatim out of the
+checkpoint. It is what the PyTorch rebuild was derived from, and keeping it in
+the manifest means a bundle can be traced back to the shape it was built from.
+
+### `marian` — OPUS-MT, the alternative
+
+```text
+en-fr/
+├── manifest.json     1 KB
+├── encoder.onnx    147 KB    graph only
+├── encoder.data     47 MB    int8 encoder weights
+├── decoder.onnx    518 KB    graph only (merged: first step + cached steps)
+├── decoder.data     54 MB    int8 decoder weights
+├── source.spm      760 KB    upstream SentencePiece model, unmodified
+└── vocab.json      1.4 MB    upstream shared vocabulary, unmodified
+```
+
+**≈ 104 MB per direction**, Apache-2.0, twelve directions available. Built by
+`tool/build_model.py`; its manifest omits `family`, which parses as `marian`.
+
+In both families the architecture block is read from the checkpoint at build
+time, so the engine never hard-codes a shape or a special token.
 
 ---
 

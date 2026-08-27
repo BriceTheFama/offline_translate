@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.4.0
+
+A smaller model and the API shape that goes with it. **Breaking.**
+
+### A 32 MB model, 3.2x smaller and 6-14x faster
+
+- The default model is now a **Firefox Translations student**, converted from
+  Marian to ONNX by `tool/build_tiny_model.py`. `en-fr` is **32.3 MB** against
+  OPUS-MT's 104.2 MB, a short sentence takes **8 ms** against 53 ms, and 100
+  words take **76 ms** against 1 046 ms. Resident memory per direction drops
+  from +201 MB to **+63 MB**. See [doc/model-decision.md](doc/model-decision.md)
+  for the candidates, the licences and every measurement.
+- Its decoder replaces self-attention with an **SSRU**, so the whole decoding
+  history is one `[1, 384]` state per layer. Decoding memory is now *constant in
+  the output length*: generating 109 tokens costs nothing, where OPUS-MT's
+  key/value cache grew by 82 MB over 160 tokens. It also removes the need for a
+  `use_cache_branch` `If` node — one graph serves every decoding step.
+- The tied embedding is stored transposed and read by `Gather(axis=1)` in both
+  graphs, so the 11.7 MB matrix is quantised once and shared as a single
+  `embedding.data`. Storing it per graph would have made the bundle 43 MB.
+- Cross-attention keys and values are computed in the **encoder** graph, so the
+  encoder's hidden states never cross the FFI boundary.
+- Models are **MPL-2.0**, not Apache-2.0. File-level copyleft: applications that
+  use the models are unaffected, redistributors of the converted bundles are.
+- The OPUS-MT pipeline is unchanged and still supported. `manifest.architecture.family`
+  (`marian` or `tiny-ssru`) tells the engine which decoding loop a bundle needs,
+  and `createRunner` picks between `MarianRunner` and the new `SsruRunner`.
+
+### API
+
+- **`translateSync(text: ...)` is now `translate(text)`** — synchronous, text
+  positional, still returning `TranslationResult` rather than a `Future`.
+- **`translate(text: ...)` is now `translateLong(text)`** — asynchronous, for
+  documents. `translateStream` takes its text positionally too.
+- **`initialize({languages, defaultLanguage})`** replaces `initialize({from, to})`.
+  `languages` declares the set an application needs; every installed direction
+  inside it is loaded up front, which is what makes `translate()` synchronous,
+  and anything outside it raises `UnsupportedLanguageException` instead of
+  asking for a download. `defaultLanguage` is the default target, and with
+  exactly two languages the other one becomes the default source, so
+  `translate('Hello world')` needs no direction at all.
+- `modelSource` is now optional. Without one there is no download path in the
+  process at all — `installModel` throws and nothing else changes.
+- `UnsupportedDirectionException` is renamed `UnsupportedLanguagePairException`,
+  and `UnsupportedLanguageException` is new.
+- `ModelFamily` is exported; `ModelArchitecture.family` and `modelDimension` are
+  new.
+
+### Tokenizer
+
+- **Byte fallback.** A character outside the vocabulary now becomes one `<0xNN>`
+  piece per UTF-8 byte instead of a single `<unk>`, matching
+  `SentencePieceProcessor`. The Firefox vocabulary enables it and the OPUS-MT one
+  does not, so both paths are tested.
+- **`vocab.json` is optional.** Marian models whose ids *are* SentencePiece ids
+  build the identity vocabulary from the `.spm` alone, which removes 629 KB from
+  every bundle.
+- Byte pieces are excluded from the segmentation trie and unused pieces are
+  included, matching `unigram::Model::Model`.
+- `MarianTokenizer.tokenize` now returns pieces after byte expansion, so it
+  agrees with `sentencepiece` exactly. **1 822 vectors** — including a 1 500-case
+  Unicode fuzz corpus — match on both pieces and ids for both vocabularies.
+
+### Packaging
+
+- **`OfflineTranslator.onnxRuntimeLibraryPath`** and
+  **`OfflineTranslator.onnxRuntimeVersion`** are public. Applications never need
+  the first — Gradle and CocoaPods supply the runtime — but a host test running
+  against the real engine had no way to name a local build without importing
+  `src/`, which a package should not require of its users.
+- The documented Android ABI list is corrected to **arm64-v8a, armeabi-v7a,
+  x86_64**. The AAR does ship an `x86` library, but Flutter no longer builds
+  that ABI, so claiming it was misleading.
+- Verified from a *fresh* application depending only on this package: the debug
+  APK carries `libonnxruntime.so` for those three ABIs, **zero permissions**,
+  no telemetry `ContentProvider` and no `ai.onnxruntime` Java classes.
+
+### Tests
+
+- `test/end_to_end_test.dart` runs the real model through the real ONNX Runtime
+  and the real public API on the host, asserting the expected French, the
+  sync/async split, byte fallback, chunking, and that translation completes with
+  every `HttpClient` in the process disarmed. `flutter test` is 91 tests.
+- `tool/ffi_harness.dart --report` prints the size/load/latency/RSS table.
+- `tool/verify_published_test.dart` downloads the published bundle from
+  `HttpModelSource.official()`, verifies its checksums, translates, and proves
+  the result still holds with every `HttpClient` in the process disarmed. It
+  lives outside `test/` so `flutter test` never depends on a network.
+
+### Model hosting
+
+- **`HttpModelSource.official()`** points at the published bundles on Hugging
+  Face. It is *not* the default for `initialize`: omitting `modelSource` leaves
+  a translator with no network path at all, which is the right default for an
+  application that ships its own models.
+- `tool/upload_models.py` generates the model card from the manifests — the
+  directions table, sizes and licence notes cannot drift from the contents — and
+  writes the canonical MPL-2.0 text to `LICENSE` when any bundle needs it.
+
 ## 0.3.0
 
 Renames the package and completes the language catalogue.

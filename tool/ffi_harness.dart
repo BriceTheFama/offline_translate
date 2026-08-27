@@ -11,6 +11,7 @@
 //   --leak N    run N translations, printing RSS as it goes
 //   --long      translate progressively longer documents
 //   --matrix    compare configurations in one process (timings only)
+//   --report    the size/load/latency/RSS table in doc/performance.md
 //   --tokens F  check the bundle's tokenizer against reference vectors made by
 //               tool/make_tokenizer_vectors.py (no inference, no runtime needed)
 //   --config K  run one configuration, so its RSS delta is real; a released
@@ -28,7 +29,7 @@ import 'package:offline_translate/src/core/generation_config.dart';
 import 'package:offline_translate/src/core/model_info.dart';
 import 'package:offline_translate/src/core/runtime_config.dart';
 import 'package:offline_translate/src/engine/native/onnx_runtime.dart';
-import 'package:offline_translate/src/engine/onnx_marian_engine.dart';
+import 'package:offline_translate/src/engine/onnx_engine.dart';
 import 'package:offline_translate/src/tokenizer/marian_tokenizer.dart';
 import 'package:offline_translate/src/utils/text_segmenter.dart';
 import 'package:path/path.dart' as p;
@@ -86,13 +87,13 @@ ModelInfo loadManifest(String dir) =>
     ModelInfo.parse(File(p.join(dir, 'manifest.json')).readAsStringSync(),
         path: dir);
 
-Future<OnnxMarianEngine> open(String dir, RuntimeConfig config) async {
-  final engine = OnnxMarianEngine(loadManifest(dir), runtimeConfig: config);
+Future<OnnxEngine> open(String dir, RuntimeConfig config) async {
+  final engine = OnnxEngine(loadManifest(dir), runtimeConfig: config);
   await engine.load();
   return engine;
 }
 
-String translate(OnnxMarianEngine engine, String text,
+String translate(OnnxEngine engine, String text,
     [GenerationConfig config = const GenerationConfig()]) {
   final ids = engine.encodeText(text);
   final out = engine.generate(ids, config);
@@ -160,6 +161,8 @@ Future<void> main(List<String> args) async {
       await _long(dir);
     case '--matrix':
       await _matrix(dir);
+    case '--report':
+      await _report(dir);
     case '--config':
       await _single(dir, args[3], args.length > 4 ? int.parse(args[4]) : 9);
     default:
@@ -167,12 +170,77 @@ Future<void> main(List<String> args) async {
   }
 }
 
+/// The benchmark table: what the bundle costs on disk, to load, to run, and in
+/// resident memory. One process, one model, measured in the order a real
+/// application pays for them.
+Future<void> _report(String dir) async {
+  final manifest = loadManifest(dir);
+  final bundleBytes = Directory(dir)
+      .listSync()
+      .whereType<File>()
+      .fold<int>(0, (sum, f) => sum + f.lengthSync());
+  final rssBefore = rssMb();
+
+  final loadWatch = Stopwatch()..start();
+  final engine = await open(dir, const RuntimeConfig());
+  loadWatch.stop();
+  final rssLoaded = rssMb();
+
+  String row(String label, String value) =>
+      '${label.padRight(24)}$value';
+
+  ({int millis, int tokens}) time(String text) {
+    // One warm-up, then the median of five, because the first run of any
+    // sentence pays for lazily initialised kernels.
+    translate(engine, text);
+    final samples = <int>[];
+    var tokens = 0;
+    for (var i = 0; i < 5; i++) {
+      final ids = engine.encodeText(text);
+      final watch = Stopwatch()..start();
+      final out = engine.generate(ids, const GenerationConfig());
+      samples.add(watch.elapsedMicroseconds);
+      tokens = out.tokens.length;
+    }
+    samples.sort();
+    return (millis: samples[2] ~/ 1000, tokens: tokens);
+  }
+
+  print(row('Model', manifest.baseModel));
+  print(row('Family', manifest.architecture.family.name));
+  print(row('License', manifest.license));
+  print(row('Size',
+      '${(bundleBytes / 1048576).toStringAsFixed(1)} MB '
+      '(${manifest.files.length} files)'));
+  print(row('Load', '${loadWatch.elapsedMilliseconds} ms'));
+
+  for (final entry in <String, String>{
+    'Hello world': 'Hello world',
+    'Short sentence': 'Hello, how are you?',
+    '100 words': words(100),
+  }.entries) {
+    final result = time(entry.value);
+    final perToken = result.tokens == 0
+        ? '-'
+        : '${(result.millis / result.tokens).toStringAsFixed(2)} ms/tok';
+    print(row(entry.key,
+        '${result.millis} ms, ${result.tokens} tokens, $perToken'));
+  }
+
+  final rssPeak = rssMb();
+  print(row('RSS before load', '$rssBefore MB'));
+  print(row('RSS after load', '$rssLoaded MB (+${rssLoaded - rssBefore})'));
+  print(row('RSS peak', '$rssPeak MB (+${rssPeak - rssBefore})'));
+  await engine.dispose();
+}
+
 /// Compares the Dart tokenizer against reference vectors, returning an exit
 /// code so a build script can gate on it.
 int _checkTokens(String dir, String vectorsPath) {
+  final vocabFile = File(p.join(dir, 'vocab.json'));
   final tokenizer = MarianTokenizer.fromAssets(
     spmBytes: File(p.join(dir, 'source.spm')).readAsBytesSync(),
-    vocabJson: File(p.join(dir, 'vocab.json')).readAsStringSync(),
+    vocabJson: vocabFile.existsSync() ? vocabFile.readAsStringSync() : null,
   );
   final data =
       jsonDecode(File(vectorsPath).readAsStringSync()) as Map<String, dynamic>;

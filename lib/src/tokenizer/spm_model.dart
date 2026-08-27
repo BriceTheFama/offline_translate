@@ -25,9 +25,10 @@ class SpmPieceType {
 /// A minimal reader for the `sentencepiece.ModelProto` wire format.
 ///
 /// Only the fields required for inference are decoded: the piece list
-/// (`pieces`) and the `normalizer_spec`. This lets the package consume the
-/// original, unmodified `source.spm` files published with the OPUS-MT models,
-/// so users can verify provenance against the upstream checksums.
+/// (`pieces`), the `normalizer_spec`, and `trainer_spec.byte_fallback`. This
+/// lets the package consume the original, unmodified SentencePiece files
+/// published with the models, so users can verify provenance against the
+/// upstream checksums.
 class SpmModel {
   SpmModel._({
     required this.pieces,
@@ -37,6 +38,7 @@ class SpmModel {
     required this.addDummyPrefix,
     required this.removeExtraWhitespaces,
     required this.escapeWhitespaces,
+    required this.byteFallback,
   });
 
   /// Piece strings, indexed by SentencePiece id.
@@ -60,6 +62,12 @@ class SpmModel {
   /// Whether spaces are replaced with `U+2581`.
   final bool escapeWhitespaces;
 
+  /// Whether characters outside the vocabulary are emitted as `<0xNN>` byte
+  /// pieces rather than as a single `<unk>`.
+  ///
+  /// The OPUS-MT models do not use this; the Firefox Translations students do.
+  final bool byteFallback;
+
   /// Parses a `.spm` model file.
   static SpmModel parse(Uint8List bytes) {
     final pieces = <String>[];
@@ -69,6 +77,7 @@ class SpmModel {
     var addDummyPrefix = true;
     var removeExtraWhitespaces = true;
     var escapeWhitespaces = true;
+    var byteFallback = false;
 
     final r = _ProtoReader(bytes);
     while (!r.atEnd) {
@@ -98,6 +107,18 @@ class SpmModel {
         pieces.add(piece);
         scores.add(score);
         types.add(type);
+      } else if (field == 2 && wire == 2) {
+        // optional TrainerSpec trainer_spec = 2;
+        final sub = r.readLengthDelimited();
+        final t = _ProtoReader(sub);
+        while (!t.atEnd) {
+          final tag = t.readVarint();
+          if (tag >> 3 == 35) {
+            byteFallback = t.readVarint() != 0; // bool byte_fallback = 35
+          } else {
+            t.skip(tag & 7);
+          }
+        }
       } else if (field == 3 && wire == 2) {
         // optional NormalizerSpec normalizer_spec = 3;
         final sub = r.readLengthDelimited();
@@ -130,6 +151,7 @@ class SpmModel {
       addDummyPrefix: addDummyPrefix,
       removeExtraWhitespaces: removeExtraWhitespaces,
       escapeWhitespaces: escapeWhitespaces,
+      byteFallback: byteFallback,
     );
   }
 }

@@ -127,7 +127,7 @@ and it shipped no `x86_64` Android library.
 | ONNX Runtime | 1.15.1 (2023-06) | **1.29.0 (2026-08)** |
 | Native leak per token | ~1 KB | **none** |
 | Session configuration | threads + graph level | **threads, graph level, arena, memory pattern, pre-packing, execution providers** |
-| Android ABIs | arm64-v8a, armeabi-v7a | **+ x86, x86_64** |
+| Android ABIs | arm64-v8a, armeabi-v7a | **+ x86_64** (and x86, which Flutter no longer builds) |
 | Allocations per decoding step | 1 tensor + 42 C strings | **none** |
 | `translateSync` off the UI isolate | not possible | **`translate()` runs on a worker sharing the same sessions** |
 

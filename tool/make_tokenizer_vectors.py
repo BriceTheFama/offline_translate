@@ -3,9 +3,11 @@
 
     python3 tool/make_tokenizer_vectors.py build/models/fr-en vectors/fr-en.json
 
-The vectors come from `transformers.MarianTokenizer` for the bundle's upstream
-checkpoint — the real reference implementation, not a reimplementation of it —
-and the Dart tokenizer is then checked against them by
+The vectors come from the real reference implementation, not a
+reimplementation of it: `transformers.MarianTokenizer` for an OPUS-MT bundle,
+and `sentencepiece` itself (`--spm`) for a Firefox Translations bundle, which
+has no Hugging Face checkpoint and maps SentencePiece ids straight through.
+The Dart tokenizer is then checked against them by
 
     dart run tool/ffi_harness.dart <bundle> <libonnxruntime> --tokens <file>
 
@@ -92,17 +94,37 @@ def main() -> None:
     ap.add_argument("bundle", help="a built bundle directory, e.g. build/models/fr-en")
     ap.add_argument("out", help="where to write the vectors")
     ap.add_argument("--fuzz", type=int, default=1500)
+    ap.add_argument("--spm", action="store_true",
+                    help="use sentencepiece on the bundle's own source.spm, for "
+                         "models whose ids are SentencePiece ids")
     args = ap.parse_args()
 
     with open(os.path.join(args.bundle, "manifest.json")) as fh:
         manifest = json.load(fh)
     base = manifest["base_model"]
 
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(base)
-    if type(tokenizer).__name__ != "MarianTokenizer":
-        raise SystemExit(f"{base} does not use MarianTokenizer "
-                         f"(got {type(tokenizer).__name__})")
+    if args.spm:
+        import sentencepiece
+        processor = sentencepiece.SentencePieceProcessor(
+            model_file=os.path.join(args.bundle, "source.spm"))
+        eos = manifest["architecture"]["eos_token_id"]
+
+        class tokenizer:  # noqa: N801 - a shim with the two methods used below
+            @staticmethod
+            def tokenize(text):
+                return processor.encode(text, out_type=str)
+
+            @staticmethod
+            def __call__(text):
+                return {"input_ids": processor.encode(text) + [eos]}
+
+        tokenizer = tokenizer()
+    else:
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(base)
+        if type(tokenizer).__name__ != "MarianTokenizer":
+            raise SystemExit(f"{base} does not use MarianTokenizer "
+                             f"(got {type(tokenizer).__name__})")
 
     texts = list(CASES) + fuzz(args.fuzz, seed=hash(manifest["checksum"]) & 0xFFFF)
     vectors = []

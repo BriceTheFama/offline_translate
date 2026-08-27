@@ -69,8 +69,17 @@ void main() {
         onProgress: (progress) => stages.add(progress.stage),
       );
       expect(info.id, 'en-fr');
-      expect(info.license, 'Apache-2.0');
-      expect(info.architecture.decoderLayers, 6);
+      // The suite validates whichever family the bundle is, because both are
+      // supported and the constants move with the model.
+      if (info.architecture.family == ModelFamily.tinySsru) {
+        expect(info.license, 'MPL-2.0');
+        expect(info.architecture.decoderLayers, 4);
+        expect(info.architecture.modelDimension, 384);
+      } else {
+        expect(info.license, 'Apache-2.0');
+        expect(info.architecture.decoderLayers, 6);
+        expect(info.architecture.modelDimension, 512);
+      }
       expect(stages, contains(InstallStage.verifying));
       expect(stages.last, InstallStage.done);
       expect(
@@ -84,11 +93,11 @@ void main() {
   );
 
   testWidgets(
-    'translateSync produces the expected French',
+    'translate() is synchronous and produces the expected French',
     (tester) async {
       await translator.preload(from: Language.en, to: Language.fr);
-      final result = translator.translateSync(
-        text: 'Hello, how are you?',
+      final result = translator.translate(
+        'Hello, how are you?',
         from: Language.en,
         to: Language.fr,
       );
@@ -105,13 +114,13 @@ void main() {
     'reuses the loaded model across calls',
     (tester) async {
       await translator.preload(from: Language.en, to: Language.fr);
-      final first = translator.translateSync(
-        text: 'Good morning.',
+      final first = translator.translate(
+        'Good morning.',
         from: Language.en,
         to: Language.fr,
       );
-      final second = translator.translateSync(
-        text: 'See you tomorrow.',
+      final second = translator.translate(
+        'See you tomorrow.',
         from: Language.en,
         to: Language.fr,
       );
@@ -130,13 +139,13 @@ void main() {
     (tester) async {
       await translator.preload(from: Language.en, to: Language.fr);
       const text = 'The cache should return this instantly.';
-      final first = translator.translateSync(
-        text: text,
+      final first = translator.translate(
+        text,
         from: Language.en,
         to: Language.fr,
       );
-      final second = translator.translateSync(
-        text: text,
+      final second = translator.translate(
+        text,
         from: Language.en,
         to: Language.fr,
       );
@@ -157,8 +166,8 @@ The second paragraph adds a detail, and it also contains two sentences. This
 one is deliberately a little longer so that the segmenter has something to do.
 
 The third paragraph concludes.''';
-      final result = await translator.translate(
-        text: document,
+      final result = await translator.translateLong(
+        document,
         from: Language.en,
         to: Language.fr,
       );
@@ -185,7 +194,7 @@ The third paragraph concludes.''';
       final streamed = StringBuffer();
       var events = 0;
       await for (final chunk in translator.translateStream(
-        text: document,
+        document,
         from: Language.en,
         to: Language.fr,
       )) {
@@ -193,8 +202,8 @@ The third paragraph concludes.''';
         events++;
       }
       expect(events, greaterThan(0));
-      final whole = await translator.translate(
-        text: document,
+      final whole = await translator.translateLong(
+        document,
         from: Language.en,
         to: Language.fr,
       );
@@ -209,18 +218,18 @@ The third paragraph concludes.''';
       await translator.preload(from: Language.en, to: Language.fr);
       expect(
         translator
-            .translateSync(text: '', from: Language.en, to: Language.fr)
+            .translate('', from: Language.en, to: Language.fr)
             .translatedText,
         '',
       );
       expect(
         translator
-            .translateSync(text: '   \n ', from: Language.en, to: Language.fr)
+            .translate('   \n ', from: Language.en, to: Language.fr)
             .translatedText,
         '   \n ',
       );
-      final emoji = translator.translateSync(
-        text: 'I love café 😀',
+      final emoji = translator.translate(
+        'I love café 😀',
         from: Language.en,
         to: Language.fr,
       );
@@ -231,15 +240,11 @@ The third paragraph concludes.''';
 
   testWidgets('reports a missing model instead of hanging', (tester) async {
     expect(
-      () => translator.translateSync(
-        text: 'Hallo',
-        from: Language.de,
-        to: Language.es,
-      ),
+      () => translator.translate('Hallo', from: Language.de, to: Language.es),
       throwsA(isA<ModelNotLoadedException>()),
     );
     await expectLater(
-      translator.translate(text: 'Hallo', from: Language.de, to: Language.es),
+      translator.translateLong('Hallo', from: Language.de, to: Language.es),
       throwsA(isA<ModelNotInstalledException>()),
     );
   });
@@ -252,8 +257,8 @@ The third paragraph concludes.''';
       await translator.preload(from: Language.en, to: Language.fr);
       late TranslationResult result;
       await HttpOverrides.runZoned(() async {
-        result = translator.translateSync(
-          text: 'This runs with networking disabled.',
+        result = translator.translate(
+          'This runs with networking disabled.',
           from: Language.en,
           to: Language.fr,
         );

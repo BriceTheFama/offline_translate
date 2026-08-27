@@ -8,7 +8,7 @@ import '../core/generation_config.dart';
 import '../core/model_info.dart';
 import '../exceptions/exceptions.dart';
 import '../tokenizer/marian_tokenizer.dart';
-import 'marian_runner.dart';
+import 'decoding_runner.dart';
 import 'native/onnx_runtime.dart';
 import 'native/onnx_runtime_session.dart';
 
@@ -221,7 +221,7 @@ class TranslationWorker {
 
 Future<void> _workerMain(WorkerBootstrap bootstrap) async {
   final commands = ReceivePort();
-  MarianRunner? runner;
+  DecodingRunner? runner;
   OrtSession? encoder;
   OrtSession? decoder;
   try {
@@ -231,15 +231,15 @@ Future<void> _workerMain(WorkerBootstrap bootstrap) async {
     OrtEnv.adopt(bootstrap.envAddress);
     final model =
         ModelInfo.parse(bootstrap.manifestJson, path: bootstrap.modelPath);
+    final vocabFile = File(p.join(bootstrap.modelPath, 'vocab.json'));
     final tokenizer = MarianTokenizer.fromAssets(
       spmBytes:
           File(p.join(bootstrap.modelPath, 'source.spm')).readAsBytesSync(),
-      vocabJson:
-          File(p.join(bootstrap.modelPath, 'vocab.json')).readAsStringSync(),
+      vocabJson: vocabFile.existsSync() ? vocabFile.readAsStringSync() : null,
     );
     encoder = OrtSession.adopt(bootstrap.encoderAddress);
     decoder = OrtSession.adopt(bootstrap.decoderAddress);
-    runner = MarianRunner.create(
+    runner = createRunner(
       model: model,
       tokenizer: tokenizer,
       encoder: encoder,

@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:meta/meta.dart';
 
 import '../cache/translation_cache.dart';
-import '../engine/onnx_marian_engine.dart';
+import '../engine/native/onnx_runtime.dart';
+import '../engine/onnx_engine.dart';
 import '../engine/translation_engine.dart';
 import '../exceptions/exceptions.dart';
 import '../model_manager/model_manager.dart';
@@ -26,24 +27,32 @@ typedef EngineFactory = TranslationEngine Function(ModelInfo model);
 ///
 /// ```dart
 /// final translator = await OfflineTranslator.initialize(
-///   modelSource: HttpModelSource(baseUrl: Uri.parse('https://cdn.example.com/models')),
+///   defaultLanguage: Language.fr,
+///   languages: {Language.en, Language.fr},
 /// );
-/// await translator.installModel(from: Language.en, to: Language.fr);
 ///
-/// final short = translator.translateSync(
-///   text: 'Hello, how are you?',
+/// // Short text: synchronous, no await, the result is there.
+/// final short = translator.translate(
+///   'Hello, how are you?',
 ///   from: Language.en,
 ///   to: Language.fr,
 /// );
+/// print(short.translatedText); // Bonjour, comment allez-vous ?
 ///
-/// final long = await translator.translate(
-///   text: article,
-///   from: Language.en,
-///   to: Language.fr,
-/// );
+/// // Long text: asynchronous, chunked, off the UI isolate.
+/// final long = await translator.translateLong(article, from: Language.en);
 ///
 /// await translator.dispose();
 /// ```
+///
+/// **The sync/async split is the shape of the API, not an optimisation.**
+/// [translate] returns a [TranslationResult] rather than a `Future`, so a
+/// button handler can use its result immediately; that is only possible
+/// because [initialize] has already put the model in memory, and it is why
+/// [translate] throws [ModelNotLoadedException] instead of quietly loading one.
+/// [translateLong] is the opposite trade: it may load a model, it splits the
+/// text, and it runs inference on a worker isolate attached to the same native
+/// sessions, so a long document never blocks a frame.
 class OfflineTranslator {
   OfflineTranslator._({
     required this.modelManager,
@@ -52,10 +61,11 @@ class OfflineTranslator {
     required this.maxLoadedModels,
     required TranslationCache? cache,
     required EngineFactory engineFactory,
-    required LanguagePair? defaultPair,
+    required Set<Language>? languages,
+    required this.defaultLanguage,
   })  : _cache = cache,
         _engineFactory = engineFactory,
-        _defaultPair = defaultPair;
+        _languages = languages;
 
   /// Manages installed models on disk.
   final ModelManager modelManager;
@@ -74,9 +84,28 @@ class OfflineTranslator {
   /// is unloaded when the limit is exceeded.
   final int maxLoadedModels;
 
+  /// Target language used when a translation omits `to`.
+  final Language? defaultLanguage;
+
   final TranslationCache? _cache;
   final EngineFactory _engineFactory;
-  final LanguagePair? _defaultPair;
+  final Set<Language>? _languages;
+
+  /// The languages this translator serves, or null when unrestricted.
+  Set<Language>? get languages =>
+      _languages == null ? null : Set<Language>.unmodifiable(_languages);
+
+  /// The direction used when neither `from` nor `to` is given, if one can be
+  /// worked out: a [defaultLanguage] target plus, when exactly two languages
+  /// were declared, the other one as the source.
+  LanguagePair? get _defaultPair {
+    final target = defaultLanguage;
+    if (target == null) return null;
+    final languages = _languages;
+    if (languages == null || languages.length != 2) return null;
+    final source = languages.firstWhere((l) => l != target);
+    return LanguagePair(source, target);
+  }
 
   static const TextSegmenter _segmenter = TextSegmenter();
 
@@ -87,14 +116,29 @@ class OfflineTranslator {
 
   bool _disposed = false;
 
-  /// Creates a translator and, when [from] and [to] are given, preloads that
-  /// direction so the first [translateSync] does not pay the load cost.
+  /// Creates a translator for [languages] and loads the models it already has.
+  ///
+  /// [languages] declares the set an application needs, and is the mechanism
+  /// behind "you should not have to install models you will never use": any
+  /// direction *within* the set is servable, everything outside it is rejected
+  /// with [UnsupportedLanguageException] rather than sending you to download a
+  /// model. Leaving it null declares no restriction.
+  ///
+  /// Every direction inside [languages] whose model is already installed is
+  /// loaded here, up to [maxLoadedModels] — that is what makes [translate]
+  /// synchronous afterwards. Directions that are not installed are skipped
+  /// silently; call [installModel] for those.
+  ///
+  /// [defaultLanguage] is the target used when [translate] is called without
+  /// `to`. When [languages] holds exactly two, the other one becomes the
+  /// default source, so `translate(text)` needs no direction at all.
   ///
   /// [modelSource] tells the manager where model bundles come from; it is only
-  /// consulted by [installModel]. Pass [modelManager] to supply your own.
+  /// consulted by [installModel], so it may be omitted entirely when the models
+  /// are already on disk. Pass [modelManager] to supply your own.
   static Future<OfflineTranslator> initialize({
-    Language? from,
-    Language? to,
+    Set<Language>? languages,
+    Language? defaultLanguage,
     ModelSource? modelSource,
     ModelManager? modelManager,
     GenerationConfig generationConfig = const GenerationConfig(),
@@ -103,27 +147,97 @@ class OfflineTranslator {
     int maxLoadedModels = 2,
     @visibleForTesting EngineFactory? engineFactory,
   }) async {
-    if (modelManager == null && modelSource == null) {
-      throw ArgumentError(
-          'Provide either a modelSource or a modelManager to initialize().');
+    final declared = languages == null ? null : Set<Language>.of(languages);
+    if (declared != null && declared.isEmpty) {
+      throw ArgumentError.value(languages, 'languages',
+          'Declare at least one language, or pass null');
     }
-    if ((from == null) != (to == null)) {
-      throw ArgumentError('Pass both `from` and `to`, or neither.');
+    if (declared != null &&
+        defaultLanguage != null &&
+        !declared.contains(defaultLanguage)) {
+      throw ArgumentError.value(defaultLanguage, 'defaultLanguage',
+          'is not one of the declared languages');
     }
-    final pair = from != null && to != null ? LanguagePair(from, to) : null;
     final translator = OfflineTranslator._(
-      modelManager: modelManager ?? FileModelManager(source: modelSource!),
+      modelManager: modelManager ?? FileModelManager(source: modelSource),
       generationConfig: generationConfig,
       runtimeConfig: runtimeConfig,
       maxLoadedModels: maxLoadedModels,
       cache: cache,
       engineFactory: engineFactory ??
-          (info) => OnnxMarianEngine(info, runtimeConfig: runtimeConfig),
-      defaultPair: pair,
+          (info) => OnnxEngine(info, runtimeConfig: runtimeConfig),
+      languages: declared,
+      defaultLanguage: defaultLanguage,
     );
-    if (pair != null) await translator._engineFor(pair);
+    await translator._preloadInstalled();
     return translator;
   }
+
+  /// Loads every declared direction that is already installed.
+  ///
+  /// A missing model is not an error here: an application may well initialize
+  /// before its first download. It becomes an error only when [translate] is
+  /// called for that direction, because a synchronous call cannot go to disk.
+  Future<void> _preloadInstalled() async {
+    for (final pair in _declaredPairs()) {
+      if (_engines.length >= maxLoadedModels) break;
+      try {
+        if (await modelManager.isInstalled(pair)) await _engineFor(pair);
+      } on OfflineTranslatorException {
+        // A corrupted or unreadable bundle must not stop initialize(); the
+        // failure resurfaces, with its own message, on first use.
+      }
+    }
+  }
+
+  /// Every direction inside the declared language set, default direction first.
+  List<LanguagePair> _declaredPairs() {
+    final languages = _languages;
+    if (languages == null) {
+      final fallback = _defaultPair;
+      return fallback == null
+          ? const <LanguagePair>[]
+          : <LanguagePair>[fallback];
+    }
+    final pairs = <LanguagePair>[
+      for (final from in languages)
+        for (final to in languages)
+          if (from != to) LanguagePair(from, to),
+    ];
+    final preferred = _defaultPair;
+    if (preferred != null) {
+      pairs
+        ..removeWhere((p) => p == preferred)
+        ..insert(0, preferred);
+    }
+    return pairs;
+  }
+
+  /// Where to load ONNX Runtime from, when it is not already reachable.
+  ///
+  /// Applications never need this. On Android the shared library comes from
+  /// the plugin's Gradle configuration, and on iOS and macOS from the
+  /// `onnxruntime-c` pod, so it is simply found.
+  ///
+  /// It exists for **host tests and desktop tooling**, where there is no pod
+  /// and no APK: `flutter test` running against the real engine has to be told
+  /// where a local runtime lives. Set it before [initialize]; ONNX Runtime is
+  /// opened once per process, so changing it afterwards has no effect.
+  ///
+  /// ```dart
+  /// OfflineTranslator.onnxRuntimeLibraryPath = 'third_party/.../libonnxruntime.dylib';
+  /// ```
+  static set onnxRuntimeLibraryPath(String? path) =>
+      OrtLibrary.overrideLibraryPath = path;
+
+  /// The path set by [onnxRuntimeLibraryPath], if any.
+  static String? get onnxRuntimeLibraryPath => OrtLibrary.overrideLibraryPath;
+
+  /// ONNX Runtime version backing this package, e.g. `1.29.0`.
+  ///
+  /// Reading this opens the runtime, so it throws with the same message as
+  /// [initialize] would when none can be found.
+  static String get onnxRuntimeVersion => OrtLibrary.instance.versionString;
 
   /// The translation cache, when one was supplied to [initialize].
   TranslationCache? get cache => _cache;
@@ -186,18 +300,27 @@ class OfflineTranslator {
 
   /// Translates a short text on the calling isolate and returns immediately.
   ///
-  /// The model must already be loaded — call [initialize] with a direction, or
-  /// [preload], or await one [translate] first; otherwise this throws
-  /// [ModelNotInstalledException] rather than blocking on I/O.
+  /// This is deliberately **not** a `Future`:
   ///
-  /// Inference runs synchronously on the caller's thread. On a phone that is
-  /// roughly 10-25 ms per generated token, so a short sentence costs tens of
-  /// milliseconds — fine from a button handler, but see [translate] for
-  /// anything longer than a sentence or two. Text that does not fit the model's
-  /// input window is chunked and the chunks are translated in sequence, still
-  /// synchronously.
-  TranslationResult translateSync({
-    required String text,
+  /// ```dart
+  /// final result = translator.translate('Hello, how are you?',
+  ///     from: Language.en, to: Language.fr);
+  /// print(result.translatedText); // Bonjour, comment allez-vous ?
+  /// ```
+  ///
+  /// The model must already be loaded, which [initialize] takes care of for
+  /// every installed direction it was told about. If it is not, this throws
+  /// [ModelNotLoadedException] rather than blocking on I/O — call [preload] or
+  /// [translateLong] first, both of which may load.
+  ///
+  /// Inference runs synchronously on the caller's thread: roughly 1 ms per
+  /// generated token on a laptop and a few ms on a phone, so a sentence costs
+  /// tens of milliseconds. That is fine from a button handler and wrong for a
+  /// document — use [translateLong] past a sentence or two. Text that does not
+  /// fit the model's input window is chunked and the chunks are translated in
+  /// sequence, still synchronously.
+  TranslationResult translate(
+    String text, {
     Language? from,
     Language? to,
   }) {
@@ -253,14 +376,19 @@ class OfflineTranslator {
     );
   }
 
-  /// Translates text of any length without blocking the caller between chunks.
+  /// Translates text of any length without blocking the UI isolate.
   ///
   /// Loads the model on demand, splits the text along paragraph and sentence
-  /// boundaries, and yields to the event loop between chunks so the UI keeps
-  /// running. Each individual chunk is still one synchronous inference; use
-  /// [translateStream] when you want output as it is produced.
-  Future<TranslationResult> translate({
-    required String text,
+  /// boundaries, and runs inference on a worker isolate attached to the *same*
+  /// native sessions — the model is loaded once and shared, never reloaded per
+  /// chunk. Use [translateStream] when you want output as it is produced.
+  ///
+  /// ```dart
+  /// final result = await translator.translateLong(article,
+  ///     from: Language.en, to: Language.fr);
+  /// ```
+  Future<TranslationResult> translateLong(
+    String text, {
     Language? from,
     Language? to,
   }) async {
@@ -322,9 +450,9 @@ class OfflineTranslator {
   /// Each event carries the translation of one chunk together with the source
   /// text it came from, and the separator that followed it in the source is
   /// already appended, so concatenating [TranslationResult.translatedText]
-  /// across the stream reproduces exactly what [translate] would return.
-  Stream<TranslationResult> translateStream({
-    required String text,
+  /// across the stream reproduces exactly what [translateLong] would return.
+  Stream<TranslationResult> translateStream(
+    String text, {
     Language? from,
     Language? to,
   }) async* {
@@ -371,16 +499,32 @@ class OfflineTranslator {
   }
 
   LanguagePair _resolvePair(Language? from, Language? to) {
-    if (from != null && to != null) return LanguagePair(from, to);
-    final fallback = _defaultPair;
-    if (fallback == null) {
-      throw ArgumentError(
-          'No language pair given and this translator has no default. '
-          'Pass `from:`/`to:`, or create it with OfflineTranslator.initialize('
-          'from: ..., to: ...).');
+    final target = to ?? defaultLanguage;
+    var source = from;
+    if (source == null || target == null) {
+      final fallback = _defaultPair;
+      if (fallback == null) {
+        throw ArgumentError(
+            'No language pair given and this translator has no default. Pass '
+            '`from:` and `to:`, or initialize() with a `defaultLanguage:` and '
+            'exactly two `languages:`.');
+      }
+      source ??= fallback.from;
     }
-    if (from == null && to == null) return fallback;
-    return LanguagePair(from ?? fallback.from, to ?? fallback.to);
+    final pair = LanguagePair(source, target ?? _defaultPair!.to);
+    _checkDeclared(pair);
+    return pair;
+  }
+
+  /// Rejects a direction that leaves the language set given to [initialize].
+  void _checkDeclared(LanguagePair pair) {
+    final languages = _languages;
+    if (languages == null) return;
+    for (final language in <Language>[pair.from, pair.to]) {
+      if (!languages.contains(language)) {
+        throw UnsupportedLanguageException(language, languages);
+      }
+    }
   }
 
   Future<TranslationEngine> _engineFor(LanguagePair pair) {

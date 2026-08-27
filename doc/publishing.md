@@ -17,7 +17,7 @@ fatal: not a git repository
 ```
 
 `pubspec.yaml` already declares `repository:` and `issue_tracker:` pointing at
-`github.com/kouevidjinbrice/offline_translate`. pub.dev does not verify that the
+`github.com/BriceTheFama/offline_translate`. pub.dev does not verify that the
 URL resolves, but it links to it from the package page and awards pub points for
 it, so pointing at a repository that does not exist is both a lost score and a
 broken promise to anyone who clicks it.
@@ -27,7 +27,7 @@ cd ~/perso/offline_translate/offline_translate
 git init -b main
 git add .
 git commit -m "offline_translate 0.3.0"
-gh repo create kouevidjinbrice/offline_translate --public --source=. --push
+gh repo create BriceTheFama/offline_translate --public --source=. --push
 ```
 
 If you pick a different repository name or owner, change `repository:` and
@@ -96,32 +96,49 @@ status: 200
 streamed bytes: 778395     # exactly source.spm
 ```
 
+The published bundles live at
+[`fama-corp/offline_translate`](https://huggingface.co/fama-corp/offline_translate),
+which is what `HttpModelSource.official()` resolves to. To publish there, or to
+your own repository:
+
 ```sh
 pip install huggingface_hub
-huggingface-cli login
+hf auth login
 
-python3 tool/upload_models.py ~/ot-models \
-  --repo kouevidjinbrice/offline-translate-models --dry-run
-python3 tool/upload_models.py ~/ot-models \
-  --repo kouevidjinbrice/offline-translate-models
+python3 tool/upload_models.py ~/ot-models-tiny --dry-run
+python3 tool/upload_models.py ~/ot-models-tiny
 ```
 
-The script creates the repository, writes a model card listing every direction
-with its size, vocabulary, upstream checkpoint and **licence** — including the
-attribution note that `en→de`'s CC-BY-4.0 requires — and uploads only the seven
-files a bundle actually needs.
+The script creates the repository if needed, writes a model card listing every
+direction with its size, family, vocabulary, upstream project and **licence** —
+all read from the manifests, so the card cannot drift from what the repository
+actually contains — writes the canonical MPL-2.0 text to `LICENSE` when any
+bundle needs it, and uploads only the files a bundle needs.
 
 Consumers then write:
 
 ```dart
 final translator = await OfflineTranslator.initialize(
-  modelSource: HttpModelSource(baseUrl: Uri.parse(
-      'https://huggingface.co/kouevidjinbrice/offline-translate-models/resolve/main')),
+  languages: {Language.en, Language.fr},
+  modelSource: HttpModelSource.official(),
 );
 ```
 
-It is also the honest place for them: right next to the Apache-2.0 and
-CC-BY-4.0 checkpoints they were converted from.
+Verify the result end to end, from the published URL to a translation:
+
+```sh
+flutter test tool/verify_published_test.dart
+```
+
+Hugging Face is also the honest place for these files: right next to the
+checkpoints they were converted from.
+
+**MPL-2.0 means the upload is a redistribution.** Whoever hosts converted
+bundles must keep them under MPL-2.0 and make the source form available — the
+conversion pipeline (`tool/build_tiny_model.py`, `tool/marian_binary.py`,
+`tool/tiny_transformer.py`) plus the upstream checkpoint. The generated model
+card points at this repository for exactly that reason, so **this repository has
+to be public** for the obligation to be met.
 
 ### 2.2 Alternatives
 

@@ -40,8 +40,10 @@ const bool autorunBenchmark =
     String.fromEnvironment('OT_AUTORUN', defaultValue: '') == 'bench';
 
 /// Direction to exercise, e.g. `--dart-define=OT_AUTORUN_PAIR=de-es`.
-const String autorunPair =
-    String.fromEnvironment('OT_AUTORUN_PAIR', defaultValue: 'en-fr');
+const String autorunPair = String.fromEnvironment(
+  'OT_AUTORUN_PAIR',
+  defaultValue: 'en-fr',
+);
 
 /// Runs the self-check and prints its findings.
 Future<AutorunReport> runSelfCheck() async {
@@ -93,8 +95,8 @@ Future<AutorunReport> runSelfCheck() async {
     await translator.preload(from: pair.from, to: pair.to);
     emit('loaded=${pair.id}');
 
-    final short = translator.translateSync(
-      text: 'Hello, how are you?',
+    final short = translator.translate(
+      'Hello, how are you?',
       from: pair.from,
       to: pair.to,
     );
@@ -103,11 +105,10 @@ Future<AutorunReport> runSelfCheck() async {
       'text=${short.translatedText}',
     );
 
-    final long = await translator.translate(
-      text:
-          'The network is switched off. This sentence is translated '
-          'entirely on the device.\n\n'
-          'Nothing leaves the phone, and no server is involved at any point.',
+    final long = await translator.translateLong(
+      'The network is switched off. This sentence is translated '
+      'entirely on the device.\n\n'
+      'Nothing leaves the phone, and no server is involved at any point.',
       from: pair.from,
       to: pair.to,
     );
@@ -138,7 +139,8 @@ Future<void> _benchmark(
   void Function(String) emit,
 ) async {
   String words(int count) {
-    const sample = 'The quick brown fox jumps over the lazy dog near the river '
+    const sample =
+        'The quick brown fox jumps over the lazy dog near the river '
         'bank while the sun slowly sets behind the distant hills and the '
         'evening air turns cold. ';
     final buffer = StringBuffer();
@@ -152,11 +154,14 @@ Future<void> _benchmark(
 
   int rssMb() => (ProcessInfo.currentRss / 1048576).round();
 
-  emit('bench_mode=${_buildMode()} cores=${Platform.numberOfProcessors} '
-      'rss=${rssMb()}MB');
+  emit(
+    'bench_mode=${_buildMode()} cores=${Platform.numberOfProcessors} '
+    'rss=${rssMb()}MB',
+  );
 
   const short = 'Hello world';
-  const sentence = 'The committee agreed that the new proposal should be '
+  const sentence =
+      'The committee agreed that the new proposal should be '
       'reviewed carefully before any final decision is taken next month.';
 
   for (final entry in <(String, String)>[
@@ -169,20 +174,25 @@ Future<void> _benchmark(
     var chunks = 1;
     for (var i = 0; i < 5; i++) {
       final watch = Stopwatch()..start();
-      final result = translator.translateSync(
-          text: entry.$2, from: pair.from, to: pair.to);
+      final result = translator.translate(
+        entry.$2,
+        from: pair.from,
+        to: pair.to,
+      );
       samples.add(watch.elapsedMicroseconds);
       chunks = result.chunkCount;
     }
     samples.sort();
-    emit('bench_${entry.$1}='
-        '${(samples[2] / 1000).toStringAsFixed(1)}ms chunks=$chunks');
+    emit(
+      'bench_${entry.$1}='
+      '${(samples[2] / 1000).toStringAsFixed(1)}ms chunks=$chunks',
+    );
   }
 
   // Repeated translation, to show memory does not creep on this device.
   final baseline = rssMb();
   for (var i = 0; i < 200; i++) {
-    translator.translateSync(text: sentence, from: pair.from, to: pair.to);
+    translator.translate(sentence, from: pair.from, to: pair.to);
   }
   emit('bench_leak_200x=${rssMb() - baseline}MB rss=${rssMb()}MB');
 
@@ -196,15 +206,20 @@ Future<void> _benchmark(
     last = now;
   });
   final watch = Stopwatch()..start();
-  final result =
-      await translator.translate(text: document, from: pair.from, to: pair.to);
+  final result = await translator.translateLong(
+    document,
+    from: pair.from,
+    to: pair.to,
+  );
   watch.stop();
   ticker.cancel();
   gaps.sort();
-  emit('bench_async_doc=${watch.elapsedMilliseconds}ms '
-      'chars=${document.length} chunks=${result.chunkCount} '
-      'ticks=${gaps.length} worst_stall=${gaps.isEmpty ? -1 : gaps.last}ms '
-      'rss=${rssMb()}MB');
+  emit(
+    'bench_async_doc=${watch.elapsedMilliseconds}ms '
+    'chars=${document.length} chunks=${result.chunkCount} '
+    'ticks=${gaps.length} worst_stall=${gaps.isEmpty ? -1 : gaps.last}ms '
+    'rss=${rssMb()}MB',
+  );
 }
 
 String _buildMode() {

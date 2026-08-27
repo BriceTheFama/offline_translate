@@ -130,8 +130,8 @@ void main() {
         await manager.verify(pair);
 
         final watch = Stopwatch()..start();
-        final result = await translator.translate(
-          text: entry.value.text,
+        final result = await translator.translateLong(
+          entry.value.text,
           from: from,
           to: to,
         );

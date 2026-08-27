@@ -101,15 +101,15 @@ void main() {
   late FileModelManager manager;
 
   Future<OfflineTranslator> makeTranslator({
-    Language? from,
-    Language? to,
+    Set<Language>? languages,
+    Language? defaultLanguage,
     TranslationCache? cache,
     int maxLoadedModels = 2,
     GenerationConfig config = const GenerationConfig(),
   }) =>
       OfflineTranslator.initialize(
-        from: from,
-        to: to,
+        languages: languages,
+        defaultLanguage: defaultLanguage,
         modelManager: manager,
         cache: cache,
         maxLoadedModels: maxLoadedModels,
@@ -138,39 +138,85 @@ void main() {
   tearDown(() => tmp.deleteSync(recursive: true));
 
   group('initialize', () {
-    test('requires a source or a manager', () {
-      expect(OfflineTranslator.initialize, throwsA(isA<ArgumentError>()));
-    });
-
-    test('rejects a half-specified default direction', () {
+    test('rejects an empty language set', () {
       expect(
         () => OfflineTranslator.initialize(
-            from: Language.en, modelManager: manager),
+            languages: const <Language>{}, modelManager: manager),
         throwsA(isA<ArgumentError>()),
       );
     });
 
-    test('preloads the direction it is given', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
+    test('rejects a default language outside the declared set', () {
+      expect(
+        () => OfflineTranslator.initialize(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.de,
+          modelManager: manager,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('preloads every installed direction inside the language set',
+        () async {
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      // Both directions of a two-language set, and the default first.
+      expect(FakeEngine.loadCount, 2);
+      expect(translator.loadedModels, <LanguagePair>[enFr, frEn]);
+      await translator.dispose();
+    });
+
+    test('never loads more than maxLoadedModels', () async {
+      final translator = await makeTranslator(
+        languages: const {Language.en, Language.fr, Language.es},
+        maxLoadedModels: 1,
+      );
       expect(FakeEngine.loadCount, 1);
+      await translator.dispose();
+    });
+
+    test('skips directions whose model is not installed', () async {
+      await manager.delete(frEn);
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
       expect(translator.loadedModels, <LanguagePair>[enFr]);
       await translator.dispose();
     });
 
-    test('loads nothing when no direction is given', () async {
+    test('loads nothing when no languages are declared', () async {
       final translator = await makeTranslator();
       expect(FakeEngine.loadCount, 0);
       expect(translator.loadedModels, isEmpty);
       await translator.dispose();
     });
+
+    test('a declared set makes every other language an error', () async {
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      expect(
+        () => translator.translate('hi', from: Language.en, to: Language.es),
+        throwsA(isA<UnsupportedLanguageException>()),
+      );
+      await expectLater(
+        translator.translateLong('hi', from: Language.es, to: Language.fr),
+        throwsA(isA<UnsupportedLanguageException>()),
+      );
+      // ...and the model for it was never needed.
+      expect(FakeEngine.loadCount, 2);
+      await translator.dispose();
+    });
   });
 
-  group('translateSync', () {
+  group('translate (synchronous)', () {
     test('translates a short text without a Future', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
-      final result = translator.translateSync(text: 'hello world');
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      final result = translator.translate('hello world');
       expect(result, isA<TranslationResult>());
       expect(result.translatedText, 'HELLO WORLD');
       expect(result.sourceText, 'hello world');
@@ -184,40 +230,43 @@ void main() {
     test('throws when the model is not loaded', () async {
       final translator = await makeTranslator();
       expect(
-        () => translator.translateSync(
-            text: 'hello', from: Language.en, to: Language.fr),
+        () => translator.translate('hello', from: Language.en, to: Language.fr),
         throwsA(isA<ModelNotLoadedException>()),
       );
       await translator.dispose();
     });
 
     test('reuses the loaded model across calls', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
-      translator.translateSync(text: 'one');
-      translator.translateSync(text: 'two');
-      translator.translateSync(text: 'three');
-      expect(FakeEngine.loadCount, 1, reason: 'the model must load once');
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      final loadsAfterInitialize = FakeEngine.loadCount;
+      translator.translate('one');
+      translator.translate('two');
+      translator.translate('three');
+      expect(FakeEngine.loadCount, loadsAfterInitialize,
+          reason: 'translating must never load a model');
       await translator.dispose();
     });
 
     test('returns whitespace-only input unchanged', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
-      expect(translator.translateSync(text: '').translatedText, '');
-      expect(translator.translateSync(text: '  \n ').translatedText, '  \n ');
-      expect(translator.translateSync(text: '').chunkCount, 0);
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      expect(translator.translate('').translatedText, '');
+      expect(translator.translate('  \n ').translatedText, '  \n ');
+      expect(translator.translate('').chunkCount, 0);
       await translator.dispose();
     });
 
     test('chunks text that exceeds the input window', () async {
       final translator = await makeTranslator(
-        from: Language.en,
-        to: Language.fr,
+        languages: const {Language.en, Language.fr},
+        defaultLanguage: Language.fr,
         config: const GenerationConfig(maxInputTokens: 4),
       );
-      final result = translator.translateSync(
-          text: 'one two three. four five six. seven eight nine.');
+      final result = translator
+          .translate('one two three. four five six. seven eight nine.');
       expect(result.chunkCount, greaterThan(1));
       expect(result.translatedText, contains('ONE'));
       expect(result.translatedText, contains('NINE'));
@@ -228,8 +277,8 @@ void main() {
   group('translate', () {
     test('loads the model on demand', () async {
       final translator = await makeTranslator();
-      final result = await translator.translate(
-          text: 'hello', from: Language.en, to: Language.fr);
+      final result = await translator.translateLong('hello',
+          from: Language.en, to: Language.fr);
       expect(result.translatedText, 'HELLO');
       expect(FakeEngine.loadCount, 1);
       await translator.dispose();
@@ -237,11 +286,11 @@ void main() {
 
     test('preserves paragraph structure', () async {
       final translator = await makeTranslator(
-        from: Language.en,
-        to: Language.fr,
+        languages: const {Language.en, Language.fr},
+        defaultLanguage: Language.fr,
         config: const GenerationConfig(maxInputTokens: 3),
       );
-      final result = await translator.translate(text: 'alpha\n\nbeta\n\ngamma');
+      final result = await translator.translateLong('alpha\n\nbeta\n\ngamma');
       expect(result.translatedText, 'ALPHA\n\nBETA\n\nGAMMA');
       expect(result.chunkCount, 3);
       await translator.dispose();
@@ -251,9 +300,9 @@ void main() {
       final translator = await makeTranslator();
       final results =
           await Future.wait<TranslationResult>(<Future<TranslationResult>>[
-        translator.translate(text: 'one', from: Language.en, to: Language.fr),
-        translator.translate(text: 'two', from: Language.en, to: Language.fr),
-        translator.translate(text: 'three', from: Language.en, to: Language.fr),
+        translator.translateLong('one', from: Language.en, to: Language.fr),
+        translator.translateLong('two', from: Language.en, to: Language.fr),
+        translator.translateLong('three', from: Language.en, to: Language.fr),
       ]);
       expect(results.map((r) => r.translatedText).toList(),
           <String>['ONE', 'TWO', 'THREE']);
@@ -266,7 +315,7 @@ void main() {
       await manager.delete(enEs);
       final translator = await makeTranslator();
       await expectLater(
-        translator.translate(text: 'hi', from: Language.en, to: Language.es),
+        translator.translateLong('hi', from: Language.en, to: Language.es),
         throwsA(isA<ModelNotInstalledException>()),
       );
       await translator.dispose();
@@ -276,27 +325,28 @@ void main() {
   group('translateStream', () {
     test('emits one event per chunk and concatenates to translate()', () async {
       final translator = await makeTranslator(
-        from: Language.en,
-        to: Language.fr,
+        languages: const {Language.en, Language.fr},
+        defaultLanguage: Language.fr,
         config: const GenerationConfig(maxInputTokens: 3),
       );
       const text = 'alpha\n\nbeta\n\ngamma';
       final buffer = StringBuffer();
       var events = 0;
-      await for (final chunk in translator.translateStream(text: text)) {
+      await for (final chunk in translator.translateStream(text)) {
         buffer.write(chunk.translatedText);
         events++;
       }
       expect(events, 3);
-      final whole = await translator.translate(text: text);
+      final whole = await translator.translateLong(text);
       expect(buffer.toString(), whole.translatedText);
       await translator.dispose();
     });
 
     test('emits nothing for blank input', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
-      expect(await translator.translateStream(text: '   ').toList(), isEmpty);
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      expect(await translator.translateStream('   ').toList(), isEmpty);
       await translator.dispose();
     });
   });
@@ -304,23 +354,24 @@ void main() {
   group('cache', () {
     test('serves an identical request without touching the engine', () async {
       final translator = await makeTranslator(
-        from: Language.en,
-        to: Language.fr,
+        languages: const {Language.en, Language.fr},
+        defaultLanguage: Language.fr,
         cache: TranslationCache(maxEntries: 8),
       );
-      translator.translateSync(text: 'hello');
+      translator.translate('hello');
       final calls = FakeEngine.generated.length;
-      final second = translator.translateSync(text: 'hello');
+      final second = translator.translate('hello');
       expect(second.fromCache, isTrue);
       expect(FakeEngine.generated.length, calls);
       await translator.dispose();
     });
 
     test('is bypassed when no cache is configured', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
-      translator.translateSync(text: 'hello');
-      final second = translator.translateSync(text: 'hello');
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      translator.translate('hello');
+      final second = translator.translate('hello');
       expect(second.fromCache, isFalse);
       expect(FakeEngine.generated.length, 2);
       await translator.dispose();
@@ -328,11 +379,11 @@ void main() {
 
     test('is dropped for a direction when its model is deleted', () async {
       final translator = await makeTranslator(
-        from: Language.en,
-        to: Language.fr,
+        languages: const {Language.en, Language.fr},
+        defaultLanguage: Language.fr,
         cache: TranslationCache(),
       );
-      translator.translateSync(text: 'hello');
+      translator.translate('hello');
       expect(translator.cache!.length, 1);
       await translator.deleteModel(from: Language.en, to: Language.fr);
       expect(translator.cache!.isEmpty, isTrue);
@@ -348,7 +399,7 @@ void main() {
       expect(translator.loadedModels, hasLength(2));
 
       // Touch en-fr so fr-en becomes the eviction candidate.
-      await translator.translate(text: 'x', from: Language.en, to: Language.fr);
+      await translator.translateLong('x', from: Language.en, to: Language.fr);
       await translator.preload(from: Language.en, to: Language.es);
 
       expect(translator.loadedModels, hasLength(2));
@@ -369,10 +420,11 @@ void main() {
     });
 
     test('unload frees memory but keeps the files', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
       await translator.unload(from: Language.en, to: Language.fr);
-      expect(translator.loadedModels, isEmpty);
+      expect(translator.loadedModels, isNot(contains(enFr)));
       expect(
           await translator.isModelAvailable(from: Language.en, to: Language.fr),
           isTrue);
@@ -380,10 +432,11 @@ void main() {
     });
 
     test('deleteModel unloads and removes the files', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
       await translator.deleteModel(from: Language.en, to: Language.fr);
-      expect(translator.loadedModels, isEmpty);
+      expect(translator.loadedModels, isNot(contains(enFr)));
       expect(
           await translator.isModelAvailable(from: Language.en, to: Language.fr),
           isFalse);
@@ -401,20 +454,24 @@ void main() {
     });
 
     test('is idempotent', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      final loaded = FakeEngine.loadCount;
       await translator.dispose();
       await translator.dispose();
-      expect(FakeEngine.disposeCount, 1);
+      expect(FakeEngine.disposeCount, loaded,
+          reason: 'every engine is released exactly once');
     });
 
     test('rejects further use', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
       await translator.dispose();
-      expect(() => translator.translateSync(text: 'hi'),
+      expect(() => translator.translate('hi'),
           throwsA(isA<TranslatorDisposedException>()));
-      await expectLater(translator.translate(text: 'hi'),
+      await expectLater(translator.translateLong('hi'),
           throwsA(isA<TranslatorDisposedException>()));
       await expectLater(translator.installModel(),
           throwsA(isA<TranslatorDisposedException>()));
@@ -422,28 +479,32 @@ void main() {
 
     test('a fresh translator works after the previous one was disposed',
         () async {
-      final first = await makeTranslator(from: Language.en, to: Language.fr);
-      first.translateSync(text: 'hello');
+      final first = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      first.translate('hello');
       await first.dispose();
 
-      final second = await makeTranslator(from: Language.en, to: Language.fr);
-      expect(second.translateSync(text: 'hello').translatedText, 'HELLO');
+      final second = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      expect(second.translate('hello').translatedText, 'HELLO');
       await second.dispose();
     });
   });
 
   group('direction resolution', () {
     test('falls back to the default direction', () async {
-      final translator =
-          await makeTranslator(from: Language.en, to: Language.fr);
-      expect(translator.translateSync(text: 'hi').targetLanguage, Language.fr);
+      final translator = await makeTranslator(
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr);
+      expect(translator.translate('hi').targetLanguage, Language.fr);
       await translator.dispose();
     });
 
     test('requires an explicit direction when there is no default', () async {
       final translator = await makeTranslator();
-      expect(() => translator.translateSync(text: 'hi'),
-          throwsA(isA<ArgumentError>()));
+      expect(() => translator.translate('hi'), throwsA(isA<ArgumentError>()));
       await translator.dispose();
     });
   });

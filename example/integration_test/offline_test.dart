@@ -72,8 +72,8 @@ void main() {
       await manager.verify(const LanguagePair(Language.en, Language.fr));
 
       await translator.preload(from: Language.en, to: Language.fr);
-      final result = translator.translateSync(
-        text: 'Hello, how are you?',
+      final result = translator.translate(
+        'Hello, how are you?',
         from: Language.en,
         to: Language.fr,
       );
@@ -110,8 +110,8 @@ void main() {
       await manager.verify(const LanguagePair(Language.en, Language.fr));
 
       final translator = await OfflineTranslator.initialize(
-        from: Language.en,
-        to: Language.fr,
+        languages: const {Language.en, Language.fr},
+        defaultLanguage: Language.fr,
         modelManager: manager,
       );
 
@@ -128,18 +128,17 @@ void main() {
         networkIsDown = true;
       }
 
-      final short = translator.translateSync(
-        text: 'Hello, how are you?',
+      final short = translator.translate(
+        'Hello, how are you?',
         from: Language.en,
         to: Language.fr,
       );
       expect(short.translatedText, 'Bonjour, comment allez-vous ?');
 
-      final long = await translator.translate(
-        text:
-            'The network is switched off. This sentence is being translated '
-            'entirely on the device.\n\n'
-            'Nothing leaves the phone, and no server is involved at any point.',
+      final long = await translator.translateLong(
+        'The network is switched off. This sentence is being translated '
+        'entirely on the device.\n\n'
+        'Nothing leaves the phone, and no server is involved at any point.',
         from: Language.en,
         to: Language.fr,
       );

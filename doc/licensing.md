@@ -69,7 +69,49 @@ app and do not affect the app's licensing.
 
 ---
 
-## 4. The models — the part that actually constrains you
+## 4. The default models: Firefox Translations, MPL-2.0
+
+The models this package ships by default come from
+[mozilla/firefox-translations-models](https://github.com/mozilla/firefox-translations-models),
+under the **Mozilla Public License 2.0**. This is the only copyleft licence
+anywhere in the stack, so it is worth being precise about what it does and does
+not reach.
+
+| | |
+|---|---|
+| Licence | MPL-2.0 |
+| Commercial use | **yes**, without restriction |
+| Attribution | required |
+| Copyleft scope | **per file**, and only files that are MPL-licensed or derived from them |
+
+**Using the models does not make your application MPL-2.0.** MPL-2.0 §1.10 and
+§3.3 attach the obligation to "Covered Software" — the licensed files and their
+modifications — not to a larger work that merely combines with them. Your
+application code, and this package, keep their own licences. This is the whole
+practical difference between MPL and the GPL family, and it is why MPL-2.0 was
+acceptable here where CC-BY-NC was not.
+
+**Redistributing the converted bundles does carry an obligation.** The ONNX
+files `tool/build_tiny_model.py` produces are derived from MPL-2.0 files, so:
+
+* keep them under MPL-2.0;
+* make the **source form** available to recipients. In practice this means
+  pointing at the upstream checkpoint and at `tool/build_tiny_model.py`,
+  `tool/marian_binary.py` and `tool/tiny_transformer.py` — together they are the
+  complete recipe from the published Marian binary to the shipped bundle;
+* keep the licence notice. Each bundle's `manifest.json` records
+  `"license": "MPL-2.0"` and its `base_model`, and `ModelInfo.license` exposes
+  both to the application, so a credits screen can read them at runtime rather
+  than hard-coding them.
+
+If MPL-2.0 is unacceptable in your context, `tool/build_model.py` builds
+Apache-2.0 OPUS-MT bundles that this package runs equally well — larger and
+slower, but permissive. See
+[model-decision.md](model-decision.md) for what that trade costs.
+
+---
+
+## 5. The OPUS-MT models — the alternative
 
 Model weights are **not** covered by this package's license. Each bundle carries
 its upstream license in `manifest.json`, and you inherit that license when you
@@ -152,7 +194,7 @@ to every published NMT model.
 
 ---
 
-## 5. Data privacy
+## 6. Data privacy
 
 Nothing here is a licensing question, but it is usually asked in the same
 breath: after installation, translation makes **no network calls of any kind** —

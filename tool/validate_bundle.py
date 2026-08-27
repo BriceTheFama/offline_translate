@@ -114,7 +114,20 @@ def main() -> None:
     outputs = {output.name for output in decoder.get_outputs()}
     if "next_token" not in outputs:
         raise SystemExit("decoder.onnx has no `next_token` output; this bundle "
-                         "was not produced by tool/build_model.py")
+                         "was not produced by this repository's tooling")
+
+    family = manifest["architecture"].get("family", "marian")
+    if family != "marian":
+        # This checker drives optimum's merged decoder protocol — encoder hidden
+        # states, a growing key/value cache, `use_cache_branch`. A `tiny-ssru`
+        # bundle has none of those, and it is verified where it is built:
+        # `tool/build_tiny_model.py` decodes every fixture through the finished
+        # int8 graphs and compares against the float32 rebuild before writing
+        # the bundle. `test/end_to_end_test.dart` then runs it through the Dart
+        # engine and the public API.
+        print(f"  files and checksums OK; {family} inference is verified by "
+              "tool/build_tiny_model.py and test/end_to_end_test.dart")
+        return
 
     present_decoder = [f"present.{l}.decoder.{kv}"
                        for l in range(layers) for kv in ("key", "value")]

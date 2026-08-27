@@ -157,6 +157,87 @@ def save_with_external_data(model: onnx.ModelProto, path: str) -> None:
     os.chmod(os.path.join(directory, location), 0o644)
 
 
+def share_embedding(encoder, decoder, dest: str) -> None:
+    """Writes both graphs with the tied embedding stored once.
+
+    Marian ties the source embedding, the target embedding and the output
+    projection to one matrix, but optimum exports encoder and decoder as
+    separate ONNX files, so the same 29 MB matrix is written into both. Pointing
+    both at one `embedding.data` removes it: 104 MB -> 75.5 MB per direction,
+    with bit-identical output.
+
+    The saving is on disk and download size only. ONNX Runtime memory-maps
+    external data, so the blob is mapped once, but resident memory is unchanged
+    (measured: 339-350 MB either way) because pre-packing copies the weights
+    into ONNX Runtime's own buffers on first inference, and those copies
+    dominate the working set.
+
+    The data files are written here rather than through
+    `onnx.save(save_as_external_data=True)`, because that helper redirects every
+    large tensor to a single location and would overwrite the shared pointer.
+    """
+    ALIGN = 4096  # ONNX Runtime only memory-maps page-aligned external tensors
+
+    def largest(model):
+        best = None
+        for init in model.graph.initializer:
+            size = len(numpy_helper.to_array(init).tobytes())
+            if best is None or size > best[1]:
+                best = (init.name, size)
+        return best[0]
+
+    names = {"encoder": largest(encoder), "decoder": largest(decoder)}
+    shared = None
+    for tag, model in (("encoder", encoder), ("decoder", decoder)):
+        for init in model.graph.initializer:
+            if init.name == names[tag]:
+                payload = numpy_helper.to_array(init).tobytes()
+                if shared is None:
+                    shared = payload
+                elif payload != shared:
+                    raise SystemExit(
+                        "encoder and decoder embeddings differ; refusing to "
+                        "share them")
+    with open(os.path.join(dest, "embedding.data"), "wb") as fh:
+        fh.write(shared)
+    os.chmod(os.path.join(dest, "embedding.data"), 0o644)
+
+    def point_at(init, location, offset, length):
+        init.ClearField("raw_data")
+        del init.external_data[:]
+        init.data_location = onnx.TensorProto.EXTERNAL
+        for key, value in (("location", location), ("offset", str(offset)),
+                           ("length", str(length))):
+            entry = init.external_data.add()
+            entry.key, entry.value = key, value
+
+    for tag, model in (("encoder", encoder), ("decoder", decoder)):
+        blob = os.path.join(dest, f"{tag}.data")
+        with open(blob, "wb") as fh:
+            for init in model.graph.initializer:
+                payload = numpy_helper.to_array(init).tobytes()
+                if init.name == names[tag]:
+                    point_at(init, "embedding.data", 0, len(shared))
+                    continue
+                if len(payload) < 1024:
+                    # Small tensors — biases, layer norms, and the quantisation
+                    # scales — go back inline. They must be reset explicitly:
+                    # onnx.load() fills raw_data but leaves data_location
+                    # EXTERNAL pointing at the *source* file's offsets, and
+                    # saving that reads the scales from the wrong place. The
+                    # model still runs and quietly produces different text.
+                    init.data_location = onnx.TensorProto.DEFAULT
+                    del init.external_data[:]
+                    init.raw_data = payload
+                    continue
+                fh.write(b"\0" * ((-fh.tell()) % ALIGN))
+                offset = fh.tell()
+                fh.write(payload)
+                point_at(init, f"{tag}.data", offset, len(payload))
+        onnx.save(model, os.path.join(dest, f"{tag}.onnx"))
+        os.chmod(blob, 0o644)
+
+
 def build(pair: str, out_root: str, keep_workdir: str | None) -> None:
     if pair not in CATALOGUE:
         raise SystemExit(f"unknown pair {pair}; known: {sorted(CATALOGUE)}")
@@ -184,16 +265,16 @@ def build(pair: str, out_root: str, keep_workdir: str | None) -> None:
         quantize(os.path.join(onnx_dir, "encoder_model.onnx"), enc_q)
     dec_q = quantized_merged_decoder(onnx_dir, workdir)
 
-    save_with_external_data(onnx.load(enc_q), os.path.join(dest, "encoder.onnx"))
+    encoder = onnx.load(enc_q)
     decoder = onnx.load(dec_q)
     add_next_token(decoder, config["vocab_size"], config["pad_token_id"])
-    save_with_external_data(decoder, os.path.join(dest, "decoder.onnx"))
+    share_embedding(encoder, decoder, dest)
     for name in ("source.spm", "vocab.json"):
         shutil.copyfile(os.path.join(onnx_dir, name), os.path.join(dest, name))
 
     files = []
     for name in ("encoder.onnx", "encoder.data", "decoder.onnx", "decoder.data",
-                 "source.spm", "vocab.json"):
+                 "embedding.data", "source.spm", "vocab.json"):
         path = os.path.join(dest, name)
         files.append({"name": name, "size": os.path.getsize(path),
                       "sha256": sha256(path)})

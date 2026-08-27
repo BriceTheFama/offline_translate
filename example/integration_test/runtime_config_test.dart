@@ -89,16 +89,16 @@ void main() {
       try {
         final loadWatch = Stopwatch()..start();
         translator = await OfflineTranslator.initialize(
-          from: Language.en,
-          to: Language.fr,
+          languages: const {Language.en, Language.fr},
+          defaultLanguage: Language.fr,
           modelManager: manager,
           runtimeConfig: entry.value,
         );
         final loadMs = loadWatch.elapsedMilliseconds;
 
         final firstWatch = Stopwatch()..start();
-        final first = translator.translateSync(
-          text: text,
+        final first = translator.translate(
+          text,
           from: Language.en,
           to: Language.fr,
         );
@@ -108,11 +108,7 @@ void main() {
         final samples = <int>[];
         for (var i = 0; i < 7; i++) {
           final watch = Stopwatch()..start();
-          translator.translateSync(
-            text: text,
-            from: Language.en,
-            to: Language.fr,
-          );
+          translator.translate(text, from: Language.en, to: Language.fr);
           samples.add(watch.elapsedMicroseconds);
         }
         samples.sort();

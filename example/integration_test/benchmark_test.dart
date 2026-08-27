@@ -3,8 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:offline_translate/offline_translate.dart';
-import 'package:offline_translate/src/engine/onnx_marian_engine.dart'
-    show OnnxMarianEngine;
+import 'package:offline_translate/src/engine/onnx_engine.dart' show OnnxEngine;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -105,7 +104,7 @@ void main() {
 
   testWidgets('cold start and warm inference', (tester) async {
     final rssBefore = rssMb();
-    runtimeVersion = OnnxMarianEngine.runtimeVersion;
+    runtimeVersion = OnnxEngine.runtimeVersion;
 
     final installWatch = Stopwatch()..start();
     final info = await manager.install(
@@ -122,8 +121,8 @@ void main() {
     // Cold start: engine construction, ONNX session creation, tokenizer parse.
     final coldWatch = Stopwatch()..start();
     final translator = await OfflineTranslator.initialize(
-      from: Language.en,
-      to: Language.fr,
+      languages: const {Language.en, Language.fr},
+      defaultLanguage: Language.fr,
       modelManager: manager,
     );
     coldWatch.stop();
@@ -134,7 +133,7 @@ void main() {
     // First inference on a freshly loaded model pays ONNX Runtime's one-off
     // arena allocation, so it is reported separately from the warm figures.
     final firstWatch = Stopwatch()..start();
-    translator.translateSync(text: short, from: Language.en, to: Language.fr);
+    translator.translate(short, from: Language.en, to: Language.fr);
     firstWatch.stop();
     record('first translation', '${firstWatch.elapsedMilliseconds} ms', short);
 
@@ -150,11 +149,7 @@ void main() {
       late TranslationResult result;
       for (var i = 0; i < 3; i++) {
         final watch = Stopwatch()..start();
-        result = translator.translateSync(
-          text: text,
-          from: Language.en,
-          to: Language.fr,
-        );
+        result = translator.translate(text, from: Language.en, to: Language.fr);
         samples.add(watch.elapsedMicroseconds);
       }
       samples.sort();
@@ -170,8 +165,8 @@ void main() {
     // Long document through the async API.
     final document = paragraphs(20);
     final docWatch = Stopwatch()..start();
-    final docResult = await translator.translate(
-      text: document,
+    final docResult = await translator.translateLong(
+      document,
       from: Language.en,
       to: Language.fr,
     );
@@ -189,19 +184,15 @@ void main() {
 
   testWidgets('cache hit cost', (tester) async {
     final translator = await OfflineTranslator.initialize(
-      from: Language.en,
-      to: Language.fr,
+      languages: const {Language.en, Language.fr},
+      defaultLanguage: Language.fr,
       modelManager: manager,
       cache: TranslationCache(maxEntries: 64),
     );
-    translator.translateSync(
-      text: sentence,
-      from: Language.en,
-      to: Language.fr,
-    );
+    translator.translate(sentence, from: Language.en, to: Language.fr);
     final watch = Stopwatch()..start();
-    final hit = translator.translateSync(
-      text: sentence,
+    final hit = translator.translate(
+      sentence,
       from: Language.en,
       to: Language.fr,
     );

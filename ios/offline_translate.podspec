@@ -1,11 +1,11 @@
 Pod::Spec.new do |s|
   s.name             = 'offline_translate'
-  s.version          = '0.3.0'
+  s.version          = '0.4.0'
   s.summary          = 'Offline neural machine translation for Flutter.'
   s.description      = <<-DESC
-Runs OPUS-MT (MarianMT) translation models locally with ONNX Runtime.
+Runs compact distilled translation models locally with ONNX Runtime.
                        DESC
-  s.homepage         = 'https://github.com/kouevidjinbrice/offline_translate'
+  s.homepage         = 'https://github.com/BriceTheFama/offline_translate'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'offline_translate' => 'noreply@example.com' }
   s.source           = { :path => '.' }

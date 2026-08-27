@@ -269,4 +269,21 @@ void main() {
     await expectLater(
         manager.install(enFr), throwsA(isA<ModelDownloadException>()));
   });
+
+  group('HttpModelSource.official', () {
+    test('resolves to the published repository', () {
+      final source = HttpModelSource.official();
+      expect(
+        source.baseUrl.toString(),
+        'https://huggingface.co/fama-corp/offline_translate/resolve/main',
+      );
+      source.close();
+    });
+
+    test('can be pinned to a revision', () {
+      final source = HttpModelSource.official(revision: 'v1.0.0');
+      expect(source.baseUrl.toString(), endsWith('/resolve/v1.0.0'));
+      source.close();
+    });
+  });
 }

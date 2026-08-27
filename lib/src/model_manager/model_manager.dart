@@ -53,12 +53,28 @@ abstract class ModelManager {
 class FileModelManager implements ModelManager {
   /// Creates a manager fetching from [source].
   ///
+  /// [source] may be omitted when the models are already on disk — sideloaded
+  /// by the application, or shipped with it. Everything except [install] works
+  /// without one, which is what lets a fully offline application be built with
+  /// no download path at all.
+  ///
   /// [rootPath] overrides the default location, which is useful in tests.
-  FileModelManager({required this.source, String? rootPath})
+  FileModelManager({this.source, String? rootPath})
       : _rootPathOverride = rootPath;
 
-  /// Where model files are fetched from.
-  final ModelSource source;
+  /// Where model files are fetched from, when they are fetched at all.
+  final ModelSource? source;
+
+  ModelSource _requireSource(LanguagePair pair) {
+    final configured = source;
+    if (configured == null) {
+      throw ModelNotInstalledException(
+          '${pair.id}" and this translator has no model source; pass '
+          '`modelSource:` to initialize() to download models, or install them '
+          'on disk yourself');
+    }
+    return configured;
+  }
 
   final String? _rootPathOverride;
   Directory? _root;
@@ -146,7 +162,8 @@ class FileModelManager implements ModelManager {
     }
 
     report(InstallStage.manifest, 0, 0);
-    final manifestText = await source.fetchManifest(pair);
+    final remote = _requireSource(pair);
+    final manifestText = await remote.fetchManifest(pair);
     final ModelInfo wanted;
     try {
       wanted = ModelInfo.parse(manifestText);
@@ -177,7 +194,7 @@ class FileModelManager implements ModelManager {
       for (final file in wanted.files) {
         report(InstallStage.downloading, received, total, file.name);
         final destination = File(p.join(staging.path, file.name));
-        await source.fetchFile(pair, file.name, destination, onBytes: (delta) {
+        await remote.fetchFile(pair, file.name, destination, onBytes: (delta) {
           received += delta;
           report(InstallStage.downloading, received, total, file.name);
         });

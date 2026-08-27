@@ -9,23 +9,34 @@ import 'native/onnx_runtime_session.dart';
 import 'native/onnx_runtime_tensor.dart';
 import 'translation_engine.dart';
 
-/// Greedy decoding for OPUS-MT / MarianMT, over optimum's merged decoder.
+/// Greedy decoding for the Firefox Translations student models.
 ///
-/// See [DecodingRunner] for what a runner is and why there are two.
+/// The graphs this drives are shaped by one architectural fact: the decoder's
+/// self-attention is a Simpler Simple Recurrent Unit, not attention. Three
+/// things follow, and all three make the loop simpler than [MarianRunner]'s.
 ///
-/// Three properties drive this one's memory and speed:
+/// * **There is no key/value cache.** The decoder's entire history is one
+///   `[1, 1, d_model]` state per layer — 6 KB in total for a 4-layer model,
+///   whatever the output length. Memory per decoding step is constant instead
+///   of growing, and a long document costs no more per token than a short one.
+/// * **There is no `use_cache_branch`.** A zero state *is* the first step, so
+///   one graph and one run plan serve every step. `MarianRunner` needs two
+///   plans and an `If` node to switch between them.
+/// * **Cross-attention keys and values are computed in the encoder graph.**
+///   They depend only on the source, so the decoder reads them from an input
+///   and the encoder's hidden states never cross the FFI boundary at all.
 ///
-/// * **A decoding step allocates nothing.** Input tensors, the two
-///   `use_cache_branch` flags and the first-step placeholders are created once
-///   here and rewritten in place afterwards. The only native objects created
-///   per step are the outputs ONNX Runtime returns, and each is released before
-///   the next step.
-/// * **Names are encoded once.** A run plan owns its C strings for the life of
-///   the session, instead of re-encoding 42 of them per generated token.
-/// * **The KV cache never enters Dart.** Output tensor handles are bound
-///   straight back as the next step's inputs.
-class MarianRunner implements DecodingRunner {
-  MarianRunner._(
+/// The step-0 convention comes from Marian: decoding starts from an all-zero
+/// embedding rather than a start-of-sequence token. The bundle records that as
+/// `decoder_start_token_id: -1`, and the graph turns any negative id into a
+/// zero embedding.
+///
+/// Like [MarianRunner], a decoding step allocates nothing: the input tensors
+/// are created once and rewritten in place, the state tensors ONNX Runtime
+/// returns are bound straight back as the next step's inputs without entering
+/// Dart, and only the 8-byte `next_token` is ever read.
+class SsruRunner implements DecodingRunner {
+  SsruRunner._(
     this.model,
     this.tokenizer,
     this._encoder,
@@ -44,35 +55,32 @@ class MarianRunner implements DecodingRunner {
   final int _maxInputTokens;
 
   late final OrtRunPlan _encoderPlan;
-  late final OrtRunPlan _firstStepPlan;
-  late final OrtRunPlan _cachedStepPlan;
+  late final OrtRunPlan _decoderPlan;
 
   late final OrtTensor _encoderIds;
   late final OrtTensor _encoderMask;
   late final OrtTensor _decoderInputIds;
-  late final OrtTensor _useCacheFalse;
-  late final OrtTensor _useCacheTrue;
-  late final List<OrtTensor> _emptyPast;
+  late final OrtTensor _position;
+  late final List<OrtTensor> _zeroStates;
   late final Int64List _encoderIdsView;
   late final Int64List _encoderMaskView;
   late final Int64List _decoderInputView;
+  late final Int64List _positionView;
   late final List<OrtTensor?> _encoderOutputs;
-  late final List<OrtTensor?> _firstStepOutputs;
-  late final List<OrtTensor?> _cachedStepOutputs;
+  late final List<OrtTensor?> _decoderOutputs;
 
-  late final List<String> _pastDecoderNames;
-  late final List<String> _pastEncoderNames;
-  late final int _kvPerStep;
+  late final List<String> _crossNames;
+  late final List<String> _stateNames;
+  late final int _layers;
 
   bool _disposed = false;
 
   static const String _inputIdsName = 'input_ids';
+  static const String _positionName = 'position';
   static const String _encoderMaskName = 'encoder_attention_mask';
-  static const String _encoderStatesName = 'encoder_hidden_states';
-  static const String _useCacheBranchName = 'use_cache_branch';
 
   /// Builds the plans and scratch tensors for [encoder] and [decoder].
-  static MarianRunner create({
+  static SsruRunner create({
     required ModelInfo model,
     required MarianTokenizer tokenizer,
     required OrtSession encoder,
@@ -82,61 +90,47 @@ class MarianRunner implements DecodingRunner {
     if (!decoder.outputNames.contains('next_token')) {
       throw wrongGraph(model, 'decoder.onnx has no `next_token` output');
     }
+    if (!decoder.inputNames.contains(_positionName)) {
+      throw wrongGraph(model, 'decoder.onnx has no `position` input');
+    }
     final runner =
-        MarianRunner._(model, tokenizer, encoder, decoder, maxInputTokens);
+        SsruRunner._(model, tokenizer, encoder, decoder, maxInputTokens);
     runner._build();
     return runner;
   }
 
   void _build() {
     final arch = model.architecture;
-    final layers = arch.decoderLayers;
-    _kvPerStep = layers * 2;
+    _layers = arch.decoderLayers;
+    final dimension = arch.decoderAttentionHeads * arch.headDimension;
 
-    _pastDecoderNames = <String>[
-      for (var l = 0; l < layers; l++) ...<String>[
-        'past_key_values.$l.decoder.key',
-        'past_key_values.$l.decoder.value',
+    // The encoder emits the cross-attention key and value of every decoder
+    // layer, interleaved, which is the order `tool/build_tiny_model.py` names
+    // its outputs in.
+    _crossNames = <String>[
+      for (var l = 0; l < _layers; l++) ...<String>[
+        'cross_key.$l',
+        'cross_value.$l',
       ],
     ];
-    _pastEncoderNames = <String>[
-      for (var l = 0; l < layers; l++) ...<String>[
-        'past_key_values.$l.encoder.key',
-        'past_key_values.$l.encoder.value',
-      ],
-    ];
-    final presentDecoder = <String>[
-      for (var l = 0; l < layers; l++) ...<String>[
-        'present.$l.decoder.key',
-        'present.$l.decoder.value',
-      ],
-    ];
-    final presentEncoder = <String>[
-      for (var l = 0; l < layers; l++) ...<String>[
-        'present.$l.encoder.key',
-        'present.$l.encoder.value',
-      ],
+    _stateNames = <String>[for (var l = 0; l < _layers; l++) 'state.$l'];
+    final newStateNames = <String>[
+      for (var l = 0; l < _layers; l++) 'new_state.$l',
     ];
 
     _encoderPlan = _encoder.plan(
       const <String>['input_ids', 'attention_mask'],
-      const <String>['last_hidden_state'],
+      _crossNames,
     );
-    final decoderInputs = <String>[
-      _inputIdsName,
-      _encoderMaskName,
-      _encoderStatesName,
-      ..._pastDecoderNames,
-      ..._pastEncoderNames,
-      _useCacheBranchName,
-    ];
-    _firstStepPlan = _decoder.plan(
-      decoderInputs,
-      <String>['next_token', ...presentDecoder, ...presentEncoder],
-    );
-    _cachedStepPlan = _decoder.plan(
-      decoderInputs,
-      <String>['next_token', ...presentDecoder],
+    _decoderPlan = _decoder.plan(
+      <String>[
+        _inputIdsName,
+        _positionName,
+        _encoderMaskName,
+        ..._crossNames,
+        ..._stateNames,
+      ],
+      <String>['next_token', ...newStateNames],
     );
 
     _encoderIds = OrtTensor.int64(<int>[1, _maxInputTokens]);
@@ -145,17 +139,17 @@ class MarianRunner implements DecodingRunner {
     _encoderMaskView = _encoderMask.asInt64List(_maxInputTokens);
     _decoderInputIds = OrtTensor.int64(<int>[1, 1]);
     _decoderInputView = _decoderInputIds.asInt64List(1);
-    _useCacheFalse = OrtTensor.boolean(<int>[1], value: false);
-    _useCacheTrue = OrtTensor.boolean(<int>[1], value: true);
-    _emptyPast = <OrtTensor>[
-      for (var i = 0; i < _kvPerStep * 2; i++)
-        OrtTensor.float32(
-            <int>[1, arch.decoderAttentionHeads, 0, arch.headDimension]),
+    _position = OrtTensor.int64(<int>[1]);
+    _positionView = _position.asInt64List(1);
+    // `calloc` zeroes these, and nothing ever writes to them: they are the
+    // step-0 state, which is what "no history yet" means for an SSRU.
+    _zeroStates = <OrtTensor>[
+      for (var l = 0; l < _layers; l++)
+        OrtTensor.float32(<int>[1, 1, dimension]),
     ];
 
-    _encoderOutputs = List<OrtTensor?>.filled(1, null);
-    _firstStepOutputs = List<OrtTensor?>.filled(1 + _kvPerStep * 2, null);
-    _cachedStepOutputs = List<OrtTensor?>.filled(1 + _kvPerStep, null);
+    _encoderOutputs = List<OrtTensor?>.filled(_crossNames.length, null);
+    _decoderOutputs = List<OrtTensor?>.filled(1 + _layers, null);
   }
 
   @override
@@ -184,9 +178,8 @@ class MarianRunner implements DecodingRunner {
     final ids = OrtTensor.viewOf(_encoderIds, shape, bytesPerElement: 8);
     final mask = OrtTensor.viewOf(_encoderMask, shape, bytesPerElement: 8);
 
-    OrtTensor? hidden;
-    final pastDecoder = List<OrtTensor?>.filled(_kvPerStep, null);
-    final pastEncoder = List<OrtTensor?>.filled(_kvPerStep, null);
+    final cross = List<OrtTensor?>.filled(_crossNames.length, null);
+    final states = List<OrtTensor?>.filled(_layers, null);
     final tokens = <int>[];
     var truncated = false;
     var encodeMicros = 0;
@@ -196,23 +189,20 @@ class MarianRunner implements DecodingRunner {
         ..setInputAt(0, ids)
         ..setInputAt(1, mask)
         ..run(_encoderOutputs);
-      hidden = _encoderOutputs[0];
+      for (var i = 0; i < cross.length; i++) {
+        cross[i] = _encoderOutputs[i];
+      }
       encodeMicros = watch.elapsedMicroseconds;
 
-      _firstStepPlan
+      _decoderPlan
         ..setInput(_inputIdsName, _decoderInputIds)
-        ..setInput(_encoderMaskName, mask)
-        ..setInput(_encoderStatesName, hidden!)
-        ..setInput(_useCacheBranchName, _useCacheFalse);
-      _cachedStepPlan
-        ..setInput(_inputIdsName, _decoderInputIds)
-        ..setInput(_encoderMaskName, mask)
-        ..setInput(_encoderStatesName, hidden)
-        ..setInput(_useCacheBranchName, _useCacheTrue);
-      for (var i = 0; i < _kvPerStep; i++) {
-        _firstStepPlan
-          ..setInput(_pastDecoderNames[i], _emptyPast[i])
-          ..setInput(_pastEncoderNames[i], _emptyPast[_kvPerStep + i]);
+        ..setInput(_positionName, _position)
+        ..setInput(_encoderMaskName, mask);
+      for (var i = 0; i < cross.length; i++) {
+        _decoderPlan.setInput(_crossNames[i], cross[i]!);
+      }
+      for (var l = 0; l < _layers; l++) {
+        _decoderPlan.setInput(_stateNames[l], _zeroStates[l]);
       }
 
       final maxNew = effectiveMaxNewTokens(model, sourceLength, config);
@@ -220,23 +210,16 @@ class MarianRunner implements DecodingRunner {
       final decodeWatch = Stopwatch()..start();
 
       for (var step = 0; step < maxNew; step++) {
-        final first = step == 0;
-        final outputs = first ? _firstStepOutputs : _cachedStepOutputs;
-        (first ? _firstStepPlan : _cachedStepPlan).run(outputs);
+        _positionView[0] = step;
+        _decoderPlan.run(_decoderOutputs);
 
-        final next = outputs[0]!.int64At(0);
-        outputs[0]!.release();
+        final next = _decoderOutputs[0]!.int64At(0);
+        _decoderOutputs[0]!.release();
 
-        for (var i = 0; i < _kvPerStep; i++) {
-          pastDecoder[i]?.release();
-          pastDecoder[i] = outputs[1 + i];
-          _cachedStepPlan.setInput(_pastDecoderNames[i], pastDecoder[i]!);
-        }
-        if (first) {
-          for (var i = 0; i < _kvPerStep; i++) {
-            pastEncoder[i] = outputs[1 + _kvPerStep + i];
-            _cachedStepPlan.setInput(_pastEncoderNames[i], pastEncoder[i]!);
-          }
+        for (var l = 0; l < _layers; l++) {
+          states[l]?.release();
+          states[l] = _decoderOutputs[1 + l];
+          _decoderPlan.setInput(_stateNames[l], states[l]!);
         }
 
         if (next == arch.eosTokenId) break;
@@ -258,18 +241,16 @@ class MarianRunner implements DecodingRunner {
       // Everything ONNX Runtime handed back during this call goes away here, so
       // repeated translations do not accumulate native memory. The plans then
       // forget those pointers, because they are dangling from now on.
-      for (final tensor in pastDecoder) {
+      for (final tensor in states) {
         tensor?.release();
       }
-      for (final tensor in pastEncoder) {
+      for (final tensor in cross) {
         tensor?.release();
       }
-      hidden?.release();
       ids.release();
       mask.release();
       _encoderPlan.clearInputs();
-      _firstStepPlan.clearInputs();
-      _cachedStepPlan.clearInputs();
+      _decoderPlan.clearInputs();
     }
   }
 
@@ -284,13 +265,12 @@ class MarianRunner implements DecodingRunner {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    for (final tensor in _emptyPast) {
+    for (final tensor in _zeroStates) {
       tensor.release();
     }
     _encoderIds.release();
     _encoderMask.release();
     _decoderInputIds.release();
-    _useCacheFalse.release();
-    _useCacheTrue.release();
+    _position.release();
   }
 }

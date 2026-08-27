@@ -16,9 +16,10 @@ vectors, and the decoder produces the target sentence one token at a time,
 attending to the encoder output at every step.
 
 Running such a model on a phone used to be out of the question. Quantisation,
-better runtimes and smaller architectures have made it practical: a compact
-translation model now fits in about a hundred megabytes and produces a sentence
-in well under a second, with no server involved and no data leaving the device.
+better runtimes and smaller architectures have made it practical: a distilled
+translation model now fits in about thirty megabytes and produces a sentence in
+a few dozen milliseconds, with no server involved and no data leaving the
+device.
 ''';
 
 /// The demo screen: pick a direction, install the model, translate.
@@ -65,7 +66,11 @@ class _TranslatorPageState extends State<TranslatorPage> {
   Future<void> _bootstrap() async {
     try {
       final resolved = await DemoModelSources.resolve();
+      // Declaring the languages is what keeps the download small: this demo
+      // needs en and fr, so it is never asked for an es or de model.
       final translator = await OfflineTranslator.initialize(
+        languages: const {Language.en, Language.fr},
+        defaultLanguage: Language.fr,
         modelSource: resolved.source,
         cache: TranslationCache(maxEntries: 128),
       );
@@ -165,7 +170,7 @@ class _TranslatorPageState extends State<TranslatorPage> {
 
   /// Runs the synchronous API straight on the UI isolate — the point of the
   /// demo is that a short sentence does not visibly stall the frame.
-  void _translateSync() {
+  void _translateShort() {
     final translator = _translator;
     if (translator == null) return;
     setState(() {
@@ -173,11 +178,7 @@ class _TranslatorPageState extends State<TranslatorPage> {
       _streamed = '';
     });
     try {
-      final result = translator.translateSync(
-        text: _input.text,
-        from: _from,
-        to: _to,
-      );
+      final result = translator.translate(_input.text, from: _from, to: _to);
       setState(() => _result = result);
     } catch (e) {
       setState(() => _error = '$e');
@@ -193,8 +194,8 @@ class _TranslatorPageState extends State<TranslatorPage> {
       _streamed = '';
     });
     try {
-      final result = await translator.translate(
-        text: _input.text,
+      final result = await translator.translateLong(
+        _input.text,
         from: _from,
         to: _to,
       );
@@ -218,7 +219,7 @@ class _TranslatorPageState extends State<TranslatorPage> {
     final watch = Stopwatch()..start();
     try {
       await for (final chunk in translator.translateStream(
-        text: _input.text,
+        _input.text,
         from: _from,
         to: _to,
       )) {
@@ -298,14 +299,14 @@ class _TranslatorPageState extends State<TranslatorPage> {
               runSpacing: 8,
               children: <Widget>[
                 FilledButton.icon(
-                  onPressed: loaded ? _translateSync : null,
+                  onPressed: loaded ? _translateShort : null,
                   icon: const Icon(Icons.bolt),
-                  label: const Text('translateSync'),
+                  label: const Text('translate'),
                 ),
                 FilledButton.tonalIcon(
                   onPressed: _busy ? null : _translateAsync,
                   icon: const Icon(Icons.notes),
-                  label: const Text('translate'),
+                  label: const Text('translateLong'),
                 ),
                 OutlinedButton.icon(
                   onPressed: _busy ? null : _translateStream,
