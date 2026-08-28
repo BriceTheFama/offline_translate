@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.6.0
+
+Android on a device, honest numbers, and a hard look at the runtime's size.
+
+### Android is validated on a device
+
+- On an arm64 emulator, in **release** mode, the app installs a bundle,
+  translates `Hello, how are you?` in **12 ms**, and keeps translating after the
+  host server is stopped, the adb tunnel removed, and the app force-stopped and
+  relaunched: `installed_before=true`, `online=false`, `status=OK`.
+- Getting there exposed a packaging problem. A debug APK carries
+  `libonnxruntime.so` and `libflutter.so` for **every** ABI — about 190 MB of
+  native libraries — because a plugin's prebuilt `jniLibs` are filtered neither
+  by Flutter's `--target-platform` nor by `ndk.abiFilters`. On an emulator with
+  455 MB free that fails installation with a misleading "not enough space". The
+  example now takes `-Pabi=arm64-v8a` and excludes the rest at packaging time:
+  239 MB down to 166 MB.
+- Every integration suite falls back to the published bundles, so they run on a
+  fresh device with no `--dart-define` at all.
+
+### Performance, re-measured on the current model
+
+`doc/performance.md` was still quoting OPUS-MT latencies, wrong by 6-14×. It now
+leads with three platforms measured through the same harness:
+
+| | macOS | iOS 26.3 sim | Android 16 emu (release) |
+|---|---:|---:|---:|
+| 20-word sentence | 29.1 ms | 28.0 ms | **53.2 ms** |
+| 100 words | 89.9 ms | 87.1 ms | 136.8 ms |
+| 20-paragraph document | 2 175 ms | 2 100 ms | 3 779 ms |
+
+A 13 000-character document on Android ran 3.8 s with a **worst UI stall of
+43 ms**, and 200 consecutive translations moved resident memory by **−1 MB**.
+
+### The runtime is bigger than the model
+
+- ONNX Runtime is **30.6 MB per ABI**, already stripped — larger than the 31.2 MB
+  of model weights. The graphs use only **26 operator types**, so most of it is
+  kernels for operators these models never touch.
+- `tool/reduced_ort/required_operators_and_types.config` is that list, generated
+  from the built bundles, and `tool/build_reduced_ort.sh` builds a runtime
+  containing only those.
+- **It is not the default, and the measurement says why.** The obvious route,
+  `--minimal_build`, only reads the `.ort` format, and converting to `.ort`
+  **inlines the weights** — losing the shared external embedding. Measured on
+  `en-fr`: a 32.3 MB bundle becomes **45.2 MB**. The script therefore uses
+  `--include_ops_by_config` without `--minimal_build`. Shipping the result still
+  means maintaining six platform artefacts in place of two dependency lines, so
+  it stays a documented option.
+- The prebuilt shortcuts are dead ends: `onnxruntime-mobile` stopped at 1.18.0
+  and the `onnxruntime-mobile-c` pod at 1.9.0 (2021).
+
 ## 0.5.0
 
 The rest of the V1 catalogue, and a supply chain that verifies itself.

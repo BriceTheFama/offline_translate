@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'offline_translate'
-  s.version          = '0.5.0'
+  s.version          = '0.6.0'
   s.summary          = 'Offline neural machine translation for Flutter.'
   s.description      = <<-DESC
 Runs compact distilled translation models locally with ONNX Runtime.

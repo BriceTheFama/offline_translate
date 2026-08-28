@@ -307,7 +307,7 @@ Still off by default, now with numbers rather than expectations.
 
 ---
 
-## 5. `translateSync` and `translate`, after the rewrite
+## 5. `translate` and `translateLong`, after the rewrite
 
 The synchronous API is unchanged and still genuinely synchronous: `generate()`
 is a straight call chain from Dart into ONNX Runtime on the caller's isolate,
@@ -358,7 +358,80 @@ flutter test integration_test/stability_test.dart -d <device> --dart-define=OT_M
 
 ---
 
-## 7. Remaining limitations
+## 7. The runtime is bigger than the model
+
+The stock ONNX Runtime is **30.6 MB per Android ABI**, already stripped — larger
+than the 32.3 MB *bundle* by the measure that matters, since only one ABI ships
+to a device and the model is 31.2 MB of that bundle. It is now the single
+largest thing this package contributes to an application:
+
+```text
+lib/arm64-v8a/libonnxruntime.so   30.6 MB      the runtime
+lib/arm64-v8a/libflutter.so       35.4 MB      Flutter itself
+lib/arm64-v8a/libapp.so            5.3 MB      the application
+```
+
+That is worth attacking, because the graphs are small. `encoder.onnx` and
+`decoder.onnx` between them use **26 ONNX operator types**, all at opset 17 or
+below, plus four fused `com.microsoft` ops the optimiser introduces:
+
+```text
+Constant Mul Add Cast Gather Unsqueeze Shape MatMulInteger Div ReduceMean
+Transpose DynamicQuantizeLinear Reshape Concat Sub Pow Sqrt MatMul Relu
+Softmax Sigmoid DequantizeLinear Slice GreaterOrEqual Clip ArgMax
++ DynamicQuantizeMatMul FusedMatMul MatMulIntegerToFloat SkipLayerNormalization
+```
+
+The stock library registers kernels for every operator, type and opset ONNX
+defines. `tool/reduced_ort/required_operators_and_types.config` is the list
+above, generated from the built bundles rather than written by hand, and
+`tool/build_reduced_ort.sh` turns it into a runtime containing only those.
+
+### 7.1 What was measured, and why it is not the default
+
+Two prebuilt shortcuts exist and both are dead ends:
+
+| | latest published | vs. our 1.29.0 |
+|---|---|---|
+| `com.microsoft.onnxruntime:onnxruntime-mobile` | **1.18.0** | 11 releases behind |
+| `onnxruntime-mobile-c` (CocoaPods) | **1.9.0** (2021) | 20 releases behind |
+
+Stripping is not available either: the shipped `.so` reports `stripped` and
+`llvm-strip --strip-all` changes its size by 300 bytes.
+
+So the only route is a source build, and there is a trap in the obvious way of
+doing it. `--minimal_build` produces the smallest runtime but only reads the
+**`.ort` format**, and converting to it **inlines the weights** — which loses
+the shared external embedding that took the bundle from 43 MB to 32 MB.
+Measured on `en-fr`:
+
+| | bundle |
+|---|---:|
+| `.onnx` + external data, shared embedding | **32.3 MB** |
+| `.ort` (`encoder.ort` 25.3 + `decoder.ort` 19.9) | **45.2 MB** |
+
+Paying **12.9 MB of model** to save runtime is the wrong side of the trade.
+`tool/build_reduced_ort.sh` therefore uses `--include_ops_by_config` *without*
+`--minimal_build`: `.onnx` support and the shared embedding survive, and only
+the unused kernels go.
+
+### 7.2 Why it is left as a script rather than shipped
+
+The package currently depends on ONNX Runtime through two lines — a Gradle
+coordinate and a CocoaPods dependency — and gets every platform, every ABI and
+every future release from upstream. Shipping a reduced build replaces that with
+**six artefacts to produce, host and keep in step with every ONNX Runtime
+release**: three Android ABIs, an iOS xcframework, and macOS arm64 + x86_64.
+
+That is the same trade `doc/technical-decision.md` §2.2 records for CTranslate2,
+and it lands the same way: a real win, bought with an ongoing maintenance cost
+that is not worth paying until someone is actually blocked by the size. The
+config and the build script are in the repository so that the work is a command
+rather than a project when that day comes.
+
+---
+
+## 8. Remaining limitations
 
 * **iOS 15.1 and macOS 14.0 minimums**, inherited from the `onnxruntime-c` pod.
   Older targets need an older pod (1.23.0 goes down to macOS 13.4) and a

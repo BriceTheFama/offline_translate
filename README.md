@@ -92,7 +92,7 @@ this package. See [doc/onnx-runtime.md](doc/onnx-runtime.md).
 
 ```yaml
 dependencies:
-  offline_translate: ^0.5.0
+  offline_translate: ^0.6.0
 ```
 
 **Android** — `minSdk 24`. `INTERNET` is only needed if you download models at
@@ -485,6 +485,12 @@ layer, so decoding memory does not grow with the output.
   caller has to respect the size guidance above. Use `translateLong()` for
   anything longer than a sentence or two.
 * **Memory is ~63 MB per loaded direction**, on top of ONNX Runtime itself.
+* **ONNX Runtime is 30.6 MB per ABI** — larger than the model. The graphs use
+  only 26 operators, so a reduced build would cut most of that;
+  `tool/build_reduced_ort.sh` and its generated op config are in the repository,
+  but shipping one means maintaining six platform artefacts, so it is a
+  documented option rather than the default. See
+  [doc/onnx-runtime.md](doc/onnx-runtime.md#7-the-runtime-is-bigger-than-the-model).
 * **One direction per model file.** Install only what you use, declare it in
   `initialize(languages: ...)`, and keep `maxLoadedModels` small.
 * **No language auto-detection yet.** The architecture allows it; see
