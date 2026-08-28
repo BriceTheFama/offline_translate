@@ -38,7 +38,7 @@ android {
     // `jniLibs`, and `ndk.abiFilters` does not touch prebuilt libraries either.
     // Excluding the unwanted ABIs at packaging time does.
     //
-    //     flutter build apk --debug -Pabi=arm64-v8a
+    //     flutter build apk --debug --android-project-arg=abi=arm64-v8a
     //     echo 'abi=arm64-v8a' >> android/gradle.properties   # for flutter test
     //
     // Release builds with `--split-per-abi` are already one ABI each and need
