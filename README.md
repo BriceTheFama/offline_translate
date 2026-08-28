@@ -27,8 +27,8 @@ final article = await translator.translateLong(longText);
 |---|---|
 | Model | Firefox Translations student, 31.3 M parameters, int8 |
 | Model size | **32.3 MB per direction** |
-| Short sentence | **8 ms** on a laptop |
-| 100 words | **76 ms** |
+| Short sentence | **8 ms** on a laptop, **53 ms** on a 4-core Android |
+| 100 words | **76 ms** / **137 ms** |
 | Memory | **+63 MB** per loaded direction, constant in output length |
 | Languages | `en↔fr`, `en↔es`, `en↔de` — the six directions of the V1 brief |
 | Platforms | Android (arm64-v8a, armeabi-v7a, x86_64), iOS (arm64), macOS |
@@ -45,6 +45,11 @@ count against Mozilla's published count, and each direction's tokenizer against
 `sentencepiece` on its own vocabulary: **10 933 vectors across the six, all
 exact**.
 
+It runs on device: an Android 16 arm64 emulator installs a bundle, translates
+`Hello, how are you?` in **12 ms**, and then keeps translating after the server
+is stopped, the adb tunnel removed and the app relaunched — see
+[doc/performance.md](doc/performance.md#0-the-three-platforms-same-harness).
+
 `flutter test` proves the whole chain on the real `en→fr` model:
 
 ```console
@@ -56,8 +61,8 @@ en -> fr, on the real engine translates with every HTTP client in the process di
 All tests passed!
 ```
 
-The `en-fr` bundle is **published** at
-[`fama-corp/offline_translate`](https://huggingface.co/fama-corp/offline_translate)
+**All six bundles are published** at
+[`fama-corp/offline_translate`](https://huggingface.co/fama-corp/offline_translate),
 and the whole path from that URL to a translation is verified by one command:
 
 ```console
@@ -87,7 +92,7 @@ this package. See [doc/onnx-runtime.md](doc/onnx-runtime.md).
 
 ```yaml
 dependencies:
-  offline_translate: ^0.3.0
+  offline_translate: ^0.5.0
 ```
 
 **Android** — `minSdk 24`. `INTERNET` is only needed if you download models at
@@ -447,8 +452,22 @@ self-attention is an SSRU, so its whole history is one `[1, 384]` state per
 layer and **decoding memory does not grow with the output**; OPUS-MT's key/value
 cache adds another 82 MB while generating 160 tokens.
 
-The Android and iOS figures in [doc/performance.md](doc/performance.md) were
-measured on the OPUS-MT bundle and have not yet been re-run for this model.
+On device, same harness — and the Android column is a **release** build, driven
+through the app rather than through `flutter test`, which always builds debug:
+
+| | macOS (8 cores) | iOS 26.3 sim (8 cores) | Android 16 emu (4 cores, release) |
+|---|---:|---:|---:|
+| cold start | 243 ms | 346 ms | — |
+| `Hello world` | 3.9 ms | 7.7 ms | 12.4 ms |
+| 20-word sentence | 29.1 ms | 28.0 ms | **53.2 ms** |
+| 100 words | 89.9 ms | 87.1 ms | 136.8 ms |
+| 20-paragraph document | 2 175 ms | 2 100 ms | 3 779 ms |
+
+During that 13 000-character Android document the calling isolate kept an 8 ms
+timer alive with a **worst stall of 43 ms** — one dropped frame across 3.8
+seconds of continuous inference. And 200 consecutive translations moved resident
+memory by **−1 MB**: the SSRU decoder's history is one `[1, 384]` state per
+layer, so decoding memory does not grow with the output.
 
 ---
 

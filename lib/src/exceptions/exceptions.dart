@@ -23,17 +23,20 @@ class ModelNotInstalledException extends OfflineTranslatorException {
   final String modelId;
 }
 
-/// Thrown when [translateSync] is called before the model is in memory.
+/// Thrown when the synchronous `translate()` is called before the model is
+/// in memory.
 ///
 /// The synchronous API deliberately refuses to block on disk I/O, so the model
-/// has to be loaded first with `preload()`, by passing `from:`/`to:` to
-/// `OfflineTranslator.initialize`, or by awaiting one `translate()` call.
+/// has to be loaded first — which `OfflineTranslator.initialize` does for every
+/// installed direction inside `languages:`, and which `preload()` and
+/// `translateLong()` also do.
 class ModelNotLoadedException extends OfflineTranslatorException {
   /// Creates the exception for the model identified by [modelId].
   const ModelNotLoadedException(this.modelId)
-      : super('Model "$modelId" is not loaded. translateSync() needs the model '
-            'in memory: call preload(from:, to:) first, initialize the '
-            'translator with that direction, or await translate() once.');
+      : super('Model "$modelId" is not loaded. The synchronous translate() '
+            'needs the model in memory: initialize the translator with that '
+            'direction in `languages:`, call preload(from:, to:), or await '
+            'translateLong() once.');
 
   /// Identifier of the model that is not resident, e.g. `en-fr`.
   final String modelId;

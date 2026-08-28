@@ -1,19 +1,89 @@
 # Performance
 
-Every number here was measured on this project. Reproduce with:
+Every number here was measured on this project, on the **Firefox Translations
+student** models this package now ships (32.3 MB per direction, int8). Reproduce
+with:
 
 ```sh
 cd example
-flutter test integration_test/benchmark_test.dart      -d <device> --dart-define=OT_MODELS_DIR=$HOME/ot-models
-flutter test integration_test/stability_test.dart      -d <device> --dart-define=OT_MODELS_DIR=$HOME/ot-models
-flutter test integration_test/runtime_config_test.dart -d <device> --dart-define=OT_MODELS_DIR=$HOME/ot-models
+flutter test integration_test/benchmark_test.dart      -d <device>
+flutter test integration_test/stability_test.dart      -d <device>
+flutter test integration_test/runtime_config_test.dart -d <device>
 ```
 
-**All runs are debug builds.** Inference is native and barely affected, but the
+No `--dart-define` is needed: the suites fall back to the published bundles and
+download on first run. Pass `--dart-define=OT_MODELS_DIR=$HOME/ot-models-tiny`
+to measure a locally built bundle instead.
+
+**Most runs are debug builds.** Inference is native and barely affected, but the
 Dart-side tokenizer and orchestration are not JIT-optimised, so a release build
-is faster than what is shown. Where a number needs to be free of that overhead —
-the memory work in particular — it was taken with an AOT-compiled harness
-(`dart compile exe tool/ffi_harness.dart`), and says so.
+is faster than what is shown. The Android column below is the exception — it is
+a **release** build, driven through the app itself rather than through
+`flutter test`, which always builds debug:
+
+```sh
+flutter build apk --release --split-per-abi --dart-define=OT_AUTORUN=bench
+adb install -r build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+adb logcat | grep OT_AUTORUN
+```
+
+---
+
+## 0. The three platforms, same harness
+
+| | macOS (8 cores, debug) | iOS 26.3 simulator (8 cores, debug) | Android 16 emulator (4 cores, **release**) |
+|---|---:|---:|---:|
+| model on disk | 32.3 MB | 32.3 MB | 32.3 MB |
+| cold start (load model) | **243 ms** | 346 ms | — |
+| `Hello world` | **3.9 ms** | 7.7 ms | 12.4 ms |
+| 20-word sentence | 29.1 ms | 28.0 ms | 53.2 ms |
+| 100 words | 89.9 ms | 87.1 ms | 136.8 ms |
+| 500 words | 279.6 ms | 268.6 ms | 434.3 ms |
+| 20-paragraph document, async | 2 175 ms | 2 100 ms | 3 779 ms (30 chunks) |
+| cache hit | 59 µs | 58 µs | — |
+| RSS after load | +83 MB | +274 MB total | 250 MB total |
+| RSS after a long document | 351 MB | 319 MB | 282 MB |
+
+Three things are worth reading out of that table.
+
+**A four-core phone-class device translates a sentence in 53 ms**, in release
+mode, entirely on the device. That is well inside a button handler.
+
+**The UI is not blocked.** During the 13 000-character document the Android run
+kept an 8 ms timer alive and its **worst single stall was 43 ms** — one dropped
+frame at 60 Hz, across 3.8 seconds of continuous inference, because the work
+runs on a worker isolate attached to the same native sessions.
+
+**Memory does not drift.** 200 consecutive translations on Android moved resident
+memory by **−1 MB**. The SSRU decoder is the reason: its whole history is one
+`[1, 384]` state per layer, so decoding memory is constant in the output length
+rather than growing with it.
+
+### Against the OPUS-MT bundle this replaced
+
+Same machine, same engine, same greedy loop
+(`dart run tool/ffi_harness.dart <bundle> <runtime> --report`, macOS):
+
+| | **Firefox student** | OPUS-MT | |
+|---|---:|---:|---|
+| bundle on disk | **32.3 MB** | 104.2 MB | 3.2× smaller |
+| cold start | **338 ms** | 549 ms | |
+| `Hello world` | **2 ms** | 25 ms | |
+| `Hello, how are you?` | **8 ms** | 53 ms | 6.6× faster |
+| 100 words | **76 ms** | 1 046 ms | 13.8× faster |
+| RSS after load | **+63 MB** | +201 MB | 3.2× less |
+| RSS peak over 100 words | **+62 MB** | +283 MB | constant vs growing |
+
+The last row is the architecture showing through: OPUS-MT's key/value cache adds
+another 82 MB while generating 160 tokens; the student model's peak is *below*
+its post-load resident size.
+
+---
+
+**Sections 1 to 5 below were measured on the OPUS-MT bundle** and are kept for
+what they say about the engine, the runtime configuration and the memory work —
+none of which changed with the model. Their absolute latencies are not this
+package's current numbers; section 0 is.
 
 ---
 

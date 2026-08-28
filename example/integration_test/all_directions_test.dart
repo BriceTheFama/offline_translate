@@ -87,7 +87,12 @@ void main() {
       source = HttpModelSource(baseUrl: Uri.parse(remoteUrl));
     } else {
       final docs = await getApplicationDocumentsDirectory();
-      source = DirectoryModelSource(p.join(docs.path, 'ot-models'));
+      final pushed = Directory(p.join(docs.path, 'ot-models'));
+      // Zero configuration: fall back to the published bundles, so this runs
+      // on a fresh device with nothing but a network connection.
+      source = pushed.existsSync()
+          ? DirectoryModelSource(pushed.path)
+          : HttpModelSource.official();
     }
     manager = FileModelManager(source: source, rootPath: workDir.path);
     translator = await OfflineTranslator.initialize(

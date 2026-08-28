@@ -98,7 +98,7 @@ class _WorkerShutdown {
 /// Runs inference on a background isolate against sessions another isolate
 /// owns.
 ///
-/// This is what keeps `translate()` from stalling the UI. `translateSync()`
+/// This is what keeps `translateLong()` from stalling the UI. `translate()`
 /// deliberately stays on the caller's isolate — that is its contract — but a
 /// long document goes through here, so the interface keeps rendering while the
 /// decoder runs.
