@@ -9,9 +9,11 @@
 #      the Dart tokenizer against transformers.MarianTokenizer, on this
 #      direction's own SentencePiece model and vocabulary
 #
-# Step 2 is not optional busywork: every OPUS-MT checkpoint ships its own
-# tokenizer files, with its own vocabulary size and normalizer settings. Being
-# exact on en→fr says nothing about de→es.
+# Step 2 is not optional busywork: every checkpoint ships its own tokenizer
+# files, with its own vocabulary size, normalizer settings and — for the Firefox
+# students — its own byte-fallback pieces. Being exact on en→fr says nothing
+# about de→es. `make_tokenizer_vectors.py` reads the manifest and picks the
+# right reference implementation for the family on its own.
 set -uo pipefail
 
 MODELS="${1:?usage: validate_all.sh <models-dir> [python] [vectors-dir]}"

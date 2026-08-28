@@ -95,15 +95,23 @@ def main() -> None:
     ap.add_argument("out", help="where to write the vectors")
     ap.add_argument("--fuzz", type=int, default=1500)
     ap.add_argument("--spm", action="store_true",
-                    help="use sentencepiece on the bundle's own source.spm, for "
-                         "models whose ids are SentencePiece ids")
+                    help="force sentencepiece on the bundle's own source.spm; "
+                         "implied for models whose ids are SentencePiece ids")
     args = ap.parse_args()
 
     with open(os.path.join(args.bundle, "manifest.json")) as fh:
         manifest = json.load(fh)
     base = manifest["base_model"]
 
-    if args.spm:
+    # A `tiny-ssru` bundle has no Hugging Face checkpoint and no `vocab.json`:
+    # its ids *are* SentencePiece ids, so `sentencepiece` is the reference.
+    # Detecting that from the manifest means every caller — including
+    # tool/validate_all.sh — gets the right reference without knowing which
+    # family it is looking at.
+    family = manifest["architecture"].get("family", "marian")
+    use_spm = args.spm or family != "marian"
+
+    if use_spm:
         import sentencepiece
         processor = sentencepiece.SentencePieceProcessor(
             model_file=os.path.join(args.bundle, "source.spm"))

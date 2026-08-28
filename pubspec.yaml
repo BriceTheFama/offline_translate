@@ -3,7 +3,7 @@ description: >-
   100% offline neural machine translation for Flutter. Runs compact distilled
   translation models locally with ONNX Runtime — 32 MB per direction, no network
   access after the model is installed.
-version: 0.4.0
+version: 0.5.0
 repository: https://github.com/BriceTheFama/offline_translate
 issue_tracker: https://github.com/BriceTheFama/offline_translate/issues
 

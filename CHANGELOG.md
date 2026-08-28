@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.5.0
+
+The rest of the V1 catalogue, and a supply chain that verifies itself.
+
+### Six directions
+
+- `fr→en`, `en→es`, `es→en`, `en→de` and `de→en` join `en→fr`. **32.3 MB each**,
+  194 MB for the whole catalogue, and each verified on its own terms:
+  Mozilla's published SHA-256 for the checkpoint, Mozilla's published parameter
+  count for the rebuild, its own fixtures in its own source language, and its
+  own tokenizer vectors. **10 933 tokenizer vectors across the six, all exact.**
+- Those six are the whole of what exists directly: **every Firefox Translations
+  student is English-paired**, so `fr↔es`, `fr↔de` and `es↔de` would need a
+  two-pass pivot through English rather than a download. Documented in
+  [doc/models.md](doc/models.md#catalogue) rather than left as empty rows.
+- `--pair all` builds the catalogue, `--skip-existing` leaves what is already
+  built alone, and one failing direction no longer stops the rest.
+
+### The upstream checkpoints moved, and the pipeline now proves what it fetched
+
+- **The Git LFS objects have been deleted from GitHub.** The batch API answers
+  `410 Object does not exist on the server`, `raw` serves a 130-byte pointer and
+  `media` answers 404. The `en-fr` model had come from a cache, so the download
+  path had never actually run.
+- `metadata.json` is still served, and it publishes the **SHA-256 of every
+  checkpoint**. Bytes now come from a mirror, metadata always from Mozilla, and
+  a mirror serving anything else fails the build and deletes the file. The
+  `en-fr` checkpoint we had been using was confirmed byte-identical to
+  Mozilla's `base-memory/enfr` this way.
+- The rebuilt model's parameter count is checked against Mozilla's published
+  count. They differ by exactly the 70 `_QuantMultA` scalars, which is now
+  subtracted explicitly — a layer read with the wrong shape or a misread depth
+  fails here instead of surfacing as slightly worse translations.
+
+### Corrections
+
+- **The published BLEU was attributed to the wrong model.** 48.5 belongs to
+  Mozilla's `tiny` tier (256-dim, 2 decoder layers, 17.1 MB); this package ships
+  `base-memory` (384-dim, 4 layers), which scores **49.6 BLEU / 0.870 COMET**.
+  `doc/model-decision.md` now carries both tiers and `--tier tiny` is supported
+  for anyone whose size constraint is tighter than the brief's.
+- Manifests carry an `upstream` block — tier, checkpoint size, SHA-256 and
+  FLORES scores — so a bundle records the quality it was published with instead
+  of a number copied by hand.
+- `tool/catalogue_table.py` generates the catalogue from the manifests, and
+  `tool/make_tokenizer_vectors.py` picks its reference implementation from the
+  manifest's family, so `tool/validate_all.sh` validates either family without
+  being told which.
+
 ## 0.4.0
 
 A smaller model and the API shape that goes with it. **Breaking.**

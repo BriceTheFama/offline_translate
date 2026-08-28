@@ -11,8 +11,14 @@ import os
 import sys
 
 NAMES = {"en": "English", "fr": "French", "es": "Spanish", "de": "German"}
-ORDER = ["en-fr", "fr-en", "en-es", "es-en", "en-de", "de-en",
-         "fr-es", "es-fr", "fr-de", "de-fr", "es-de", "de-es"]
+
+# The six directions of the V1 catalogue. Every Firefox Translations student is
+# English-paired — there is no `fr↔es`, `fr↔de` or `es↔de` checkpoint upstream,
+# in any tier — so the remaining six directions of a four-language matrix are
+# not a build away: they need a pivot through English, two passes and two
+# resident models. That is a feature, not a missing file, and it is listed as
+# such rather than as an empty row.
+ORDER = ["en-fr", "fr-en", "en-es", "es-en", "en-de", "de-en"]
 
 root = sys.argv[1] if len(sys.argv) > 1 else "build/models"
 rows = []
@@ -28,22 +34,24 @@ for pair in ORDER:
     total += size
     rows.append((pair, (manifest, size)))
 
-print("| Direction | Size | Vocab | Layers | Upstream checkpoint | License |")
+print("| Direction | Size | Upstream BLEU | COMET | Upstream checkpoint | Licence |")
 print("|---|---:|---:|---:|---|---|")
 for pair, data in rows:
     src, dst = pair.split("-")
-    arrow = f"{src} → {dst}"
+    arrow = f"{NAMES[src]} → {NAMES[dst]}"
     if data is None:
-        print(f"| {arrow} | — | — | — | `Helsinki-NLP/opus-mt-{pair}` | not built |")
+        print(f"| {arrow} | — | — | — | — | not built |")
         continue
     manifest, size = data
-    arch = manifest["architecture"]
+    flores = (manifest.get("upstream") or {}).get("flores") or {}
     licence = manifest["license"]
     mark = "**" if licence != "Apache-2.0" else ""
-    print(f"| {arrow} | {size / 1048576:.1f} MB | {arch['vocab_size']} | "
-          f"{arch['decoder_layers']} | `{manifest['base_model']}` | "
+    print(f"| {arrow} | {size / 1048576:.1f} MB | {flores.get('bleu', '—')} | "
+          f"{flores.get('comet', '—')} | `{manifest['base_model']}` | "
           f"{mark}{licence}{mark} |")
 
 built = sum(1 for _, d in rows if d)
-print(f"\n{built}/12 built, {total / 1048576 / 1024:.2f} GB total "
-      f"({total / built / 1048576:.1f} MB average per direction)")
+print(f"\n{built}/{len(ORDER)} built, {total / 1048576:.0f} MB total "
+      f"({total / built / 1048576:.1f} MB per direction). BLEU and COMET are "
+      f"Mozilla's published FLORES scores for the checkpoint, copied from its "
+      f"metadata into each manifest.")

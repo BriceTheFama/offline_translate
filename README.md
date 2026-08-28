@@ -30,7 +30,7 @@ final article = await translator.translateLong(longText);
 | Short sentence | **8 ms** on a laptop |
 | 100 words | **76 ms** |
 | Memory | **+63 MB** per loaded direction, constant in output length |
-| Languages | `en↔fr` shipped; `es` and `de` build from the same pipeline |
+| Languages | `en↔fr`, `en↔es`, `en↔de` — the six directions of the V1 brief |
 | Platforms | Android (arm64-v8a, armeabi-v7a, x86_64), iOS (arm64), macOS |
 | License | MIT (package) · MPL-2.0 (models) |
 
@@ -38,8 +38,14 @@ final article = await translator.translateLong(longText);
 
 ## Status
 
-**`en→fr` is built, converted, quantised and running end to end**, and
-`flutter test` proves it on the real model:
+**All six V1 directions are built, converted, quantised and verified** —
+`en↔fr`, `en↔es`, `en↔de`, 32.3 MB each. Every checkpoint is checked against
+Mozilla's published SHA-256 before conversion, the rebuilt model's parameter
+count against Mozilla's published count, and each direction's tokenizer against
+`sentencepiece` on its own vocabulary: **10 933 vectors across the six, all
+exact**.
+
+`flutter test` proves the whole chain on the real `en→fr` model:
 
 ```console
 $ flutter test test/end_to_end_test.dart
@@ -448,9 +454,10 @@ measured on the OPUS-MT bundle and have not yet been re-run for this model.
 
 ## Limitations
 
-* **`en→fr` only, for now.** The pipeline builds `fr→en`, `en→es`, `es→en`,
-  `en→de` and `de→en` from the same code path — they are entries in
-  `CATALOGUE` — but only `en→fr` has been built and validated.
+* **Six directions, all English-paired.** `fr↔es`, `fr↔de` and `es↔de` have no
+  upstream checkpoint in any tier — Firefox pivots through English for them —
+  so they would need a two-pass pivot, which is not implemented. See
+  [doc/models.md](doc/models.md#catalogue).
 * **Quality is sentence-level.** The model has no cross-sentence context, so
   pronouns and register can drift across the chunks of a long document.
 * **Greedy decoding**, not beam search. Occasionally less fluent; 4× cheaper.

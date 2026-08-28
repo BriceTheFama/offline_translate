@@ -94,72 +94,61 @@ time, so the engine never hard-codes a shape or a special token.
 
 ## Catalogue
 
-All twelve V1 directions exist upstream. Licenses were checked **individually**,
-because they are not uniform:
+**Every Firefox Translations student is English-paired.** There is no `fr↔es`,
+`fr↔de` or `es↔de` checkpoint upstream, in any tier — Mozilla's 42 `base-memory`
+directions are all `xx→en` or `en→xx`, because Firefox pivots through English
+for the rest. So the six directions below are not a subset of a twelve-direction
+catalogue that is half-built: they are the whole of what exists directly, and
+they are exactly the six the brief names for V1.
 
-| Direction | Size | Vocab | Upstream checkpoint | License | Commercial use |
-|---|---:|---:|---|---|---|
-| en → fr | 104.2 MB | 59 514 | `Helsinki-NLP/opus-mt-en-fr` | Apache-2.0 | yes |
-| fr → en | 104.3 MB | 59 514 | `Helsinki-NLP/opus-mt-fr-en` | Apache-2.0 | yes |
-| en → es | 109.9 MB | 65 001 | `Helsinki-NLP/opus-mt-en-es` | Apache-2.0 | yes |
-| es → en | 109.9 MB | 65 001 | `Helsinki-NLP/opus-mt-es-en` | Apache-2.0 | yes |
-| **en → de** | 102.8 MB | 58 101 | `Helsinki-NLP/opus-mt-en-de` | **CC-BY-4.0** | yes, **with attribution** |
-| de → en | 102.8 MB | 58 101 | `Helsinki-NLP/opus-mt-de-en` | Apache-2.0 | yes |
-| fr → es | 120.3 MB | 74 822 | `Helsinki-NLP/opus-mt-fr-es` | Apache-2.0 | yes |
-| es → fr | 120.3 MB | 74 822 | `Helsinki-NLP/opus-mt-es-fr` | Apache-2.0 | yes |
-| fr → de | 106.0 MB | 61 153 | `Helsinki-NLP/opus-mt-fr-de` | Apache-2.0 | yes |
-| de → fr | 106.0 MB | 61 153 | `Helsinki-NLP/opus-mt-de-fr` | Apache-2.0 | yes |
-| es → de | 106.2 MB | 61 301 | `Helsinki-NLP/opus-mt-es-de` | Apache-2.0 | yes |
-| de → es | 106.2 MB | 61 301 | `Helsinki-NLP/opus-mt-de-es` | Apache-2.0 | yes |
+| Direction | Size | Upstream BLEU | COMET | Upstream checkpoint | Licence |
+|---|---:|---:|---:|---|---|
+| English → French | 32.3 MB | 49.6 | 0.8697 | `mozilla/firefox-translations-models base-memory/enfr` | **MPL-2.0** |
+| French → English | 32.3 MB | 44.3 | 0.8859 | `mozilla/firefox-translations-models base-memory/fren` | **MPL-2.0** |
+| English → Spanish | 32.3 MB | 27.7 | 0.8527 | `mozilla/firefox-translations-models base-memory/enes` | **MPL-2.0** |
+| Spanish → English | 32.3 MB | 27.5 | 0.8568 | `mozilla/firefox-translations-models base-memory/esen` | **MPL-2.0** |
+| English → German | 32.3 MB | 40.0 | 0.8651 | `mozilla/firefox-translations-models base-memory/ende` | **MPL-2.0** |
+| German → English | 32.3 MB | 41.4 | 0.8829 | `mozilla/firefox-translations-models base-memory/deen` | **MPL-2.0** |
 
-**All twelve are built and verified.** 1.27 GB for the whole catalogue,
-108 MB average per direction — but the number that matters is the 104-120 MB a
-user pays for the one or two directions their application actually installs.
+6/6 built, 194 MB total (32.3 MB per direction). BLEU and COMET are Mozilla's published FLORES scores for the checkpoint, copied from its metadata into each manifest.
 
-This table is generated from the built manifests by
-`tool/catalogue_table.py`, so the documented sizes, vocabularies and licences
-cannot drift from what was shipped.
+The remaining six directions of a four-language matrix (`fr↔es`, `fr↔de`,
+`es↔de`) need a **pivot through English**: two passes, two resident models,
+compounded errors. `OfflineTranslator` resolves a direction through
+`ModelManager`, so adding a pivot strategy is a change in one class and none to
+the public API — but it is a feature to design, not a file to download, and it
+is not implemented.
 
-`en-de` is the odd one out: CC-BY-4.0 permits commercial use but **requires
-attribution**. Its `manifest.json` records that, so an application can surface
-the right notice per installed model. See [licensing.md](licensing.md).
+This table is generated from the built manifests by `tool/catalogue_table.py`,
+so the documented sizes, scores and licences cannot drift from what was shipped.
 
-### Why every direction is verified separately
+BLEU and COMET are **Mozilla's own FLORES scores for the checkpoint**, not
+measurements of this package. They are copied out of each checkpoint's
+`metadata.json` into the bundle's manifest, so an application can read them at
+runtime. Read them comparatively rather than absolutely: they were almost
+certainly produced with beam search against this package's greedy decoding, and
+BLEU is not comparable across language pairs — `en→es` at 27.7 is not "worse"
+than `en→fr` at 49.6, it is a different reference set.
 
-It would be easy to assume that a pipeline proven on `en→fr` is proven
-everywhere. It is not. Each OPUS-MT checkpoint ships **its own** SentencePiece
-model and shared vocabulary, and they differ:
+### Provenance
 
-| | en↔fr | en↔de | en↔es | fr↔de, de↔fr | es↔de, de↔es | fr↔es |
-|---|---|---|---|---|---|---|
-| vocabulary size | 59 514 | 58 101 | 65 001 | 61 153 | 61 301 | 74 822 |
-| pad / decoder-start id | 59 513 | 58 100 | 65 000 | 61 152 | 61 300 | 74 821 |
-| bundle size | 104 MB | 103 MB | 110 MB | 106 MB | 106 MB | 120 MB |
+Every checkpoint is verified against **Mozilla's published SHA-256** before it is
+converted, and the rebuilt model's parameter count is checked against Mozilla's
+published count. That matters more than usual here, because the upstream Git LFS
+objects have been deleted from GitHub — the LFS batch API answers
+`410 Object does not exist on the server` — so the bytes come from a mirror while
+the metadata, and therefore the hash, still come from Mozilla. A mirror serving
+anything other than the published checkpoint fails the build instead of
+producing a model that translates slightly wrong. See `CHECKPOINT_MIRRORS` in
+`tool/build_tiny_model.py`.
 
-Nothing in the engine hard-codes any of that — the architecture constants are
-read from the checkpoint's `config.json` at build time and frozen into the
-manifest — but "nothing hard-codes it" is a claim that has to be checked, not
-asserted. So every direction goes through the same gate:
+### The alternative: OPUS-MT
 
-```sh
-tool/validate_all.sh ~/ot-models
-```
-
-which, per direction:
-
-1. re-hashes every file against the manifest (the same check the on-device
-   `ModelManager` performs);
-2. loads both graphs, confirms the grafted `next_token` output is present, and
-   runs the **engine's own decoding protocol** — not `transformers.generate` —
-   against real source-language sentences;
-3. generates ~1 820 tokenizer vectors from `transformers.MarianTokenizer` for
-   *that* checkpoint and checks the Dart tokenizer against every one.
-
-Result across the catalogue: **12 of 12 bundles verified, 21 878 tokenizer
-vectors matched exactly**, across five distinct vocabularies. The pure-Dart
-tokenizer generalises to every checkpoint without a special case.
-
----
+`tool/build_model.py` still builds Apache-2.0 OPUS-MT bundles for all twelve
+directions, including the six non-English ones, at 102-120 MB each. It is the
+answer for anyone who needs `fr→de` in one pass today, or who cannot accept
+MPL-2.0. `en→de` is CC-BY-4.0 there and requires attribution; the rest are
+Apache-2.0.
 
 ## Building a bundle
 

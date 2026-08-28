@@ -31,7 +31,7 @@ not with the depth. Any candidate has to be judged on `vocab × d_model` first.
 | `d_model` / layers | 512 / 6+6 | **384 / 6+4** | 1024 / 12+12 | 1024 / 12+12 | 2048 / 32+32 | 512 / 8+8 | decoder-only |
 | Vocabulary | 59 514 | **32 000** | 256 204 | 128 112 | 256 000 | 250 112 | 150 k – 260 k |
 | Size, int8 on disk | 104 MB | **32 MB** | ~620 MB | ~490 MB | ~3 GB | ~1.2 GB | 200 MB – 700 MB |
-| Quality en→fr | 46.2 BLEU (measured, greedy, FLORES devtest) | **48.5 published**, and at least as good on every fixture | ~44 | ~42 | high | not a translator | unpredictable |
+| Quality en→fr | 46.2 BLEU (measured, greedy, FLORES devtest) | **49.6 BLEU / 0.870 COMET published**, and at least as good on every fixture | ~44 | ~42 | high | not a translator | unpredictable |
 | Decoder memory per token | grows with output | **constant** | grows | grows | grows | grows | grows |
 | **License** | Apache-2.0 | **MPL-2.0** | **CC-BY-NC-4.0** | **CC-BY-NC-4.0** | Apache-2.0 | Apache-2.0 | Gemma Terms / Apache-2.0 |
 | **Commercial use** | yes | **yes** | **no** | **no** | yes | yes | Gemma: restricted |
@@ -110,6 +110,22 @@ built for exactly this constraint, and publishes them as Marian binaries.
 | decoder self-attention | yes | **none — SSRU** |
 | bundle, int8 | 104.2 MB | **32.3 MB** |
 | license | Apache-2.0 | MPL-2.0 |
+
+Mozilla publishes two tiers of student, and they are worth separating because
+one of them is smaller than anything else considered here. Both numbers come
+from the tiers' own `metadata.json`, which the build pipeline reads and copies
+into each bundle's manifest:
+
+| tier | `d_model` | enc / dec | checkpoint | FLORES BLEU | COMET |
+|---|---:|---:|---:|---:|---:|
+| `tiny` | 256 | 6 / 2 | **17.1 MB** | 48.5 | 0.857 |
+| **`base-memory`** (default) | 384 | 6 / 4 | 31.6 MB | **49.6** | **0.870** |
+
+`base-memory` is the default: at 32.3 MB the bundle is already inside the size
+budget, and 1.1 BLEU is not worth giving up to save 14 MB when nothing is
+pressing against the limit. `tiny` is a supported `--tier` for anyone whose
+constraint is tighter than the brief's — it would land near 18 MB — and the
+choice is one flag, because every shape constant is read from the checkpoint.
 
 Smaller *and* better is not a contradiction: these are distilled from a much
 stronger teacher on far more data, while the OPUS-MT base checkpoints are 2020
