@@ -129,8 +129,8 @@ to configure on either.
 ## Getting a model onto the device
 
 Models are not bundled in the package — even 32 MB per direction does not belong
-in an APK you ship to everyone, and most applications need one or two directions
-out of twelve. They are downloaded once, per direction, and then live on disk.
+in an APK you ship to everyone, and most applications need one or two of the six
+directions. They are downloaded once, per direction, and then live on disk.
 
 ### The short way: the published bundles
 

@@ -229,18 +229,56 @@ def main() -> None:
         fh.write(build_card(args.models, args.repo))
     write_licence(args.models, pairs)
 
-    print("\nuploading ...", file=sys.stderr)
+    # One direction per commit, with retries.
+    #
+    # Uploading the whole catalogue in a single call is 194 MB in one transfer,
+    # and a single dropped connection loses all of it — observed here as
+    # `Bad file descriptor` and `SSL: UNEXPECTED_EOF` against the LFS S3
+    # endpoint after several minutes. Per-direction commits make each transfer
+    # ~32 MB, make a retry cheap, and leave the repository usable after a
+    # partial run instead of unchanged.
+    #
+    # If a run fails with `ConnectionError: ... cas-server.xethub.hf.co`, the
+    # Hub's Xet backend is having trouble rather than this script or the token:
+    # `HF_HUB_DISABLE_XET=1` falls back to the classic LFS path.
+    files = ["manifest.json", "*.onnx", "*.data", "source.spm", "vocab.json"]
+    uploaded, failed_pairs = [], []
+    for index, pair in enumerate(pairs, start=1):
+        for attempt in range(1, 4):
+            try:
+                print(f"\n[{index}/{len(pairs)}] uploading {pair}"
+                      f"{'' if attempt == 1 else f' (attempt {attempt})'} ...",
+                      file=sys.stderr)
+                api.upload_folder(
+                    folder_path=os.path.join(args.models, pair),
+                    path_in_repo=pair,
+                    repo_id=args.repo,
+                    repo_type="model",
+                    commit_message=f"offline_translate bundle: {pair}",
+                    allow_patterns=files,
+                )
+                uploaded.append(pair)
+                break
+            except Exception as error:  # noqa: BLE001 - retry any transport failure
+                print(f"  {type(error).__name__}: {str(error)[:160]}",
+                      file=sys.stderr)
+                if attempt == 3:
+                    failed_pairs.append(pair)
+
+    print("\nuploading the model card and licence ...", file=sys.stderr)
     api.upload_folder(
         folder_path=args.models,
         repo_id=args.repo,
         repo_type="model",
-        commit_message=f"offline_translate bundles: {', '.join(pairs)}",
-        # Only the files a bundle actually needs; anything else in the
-        # directory (work files, vectors) stays local.
-        allow_patterns=["*/manifest.json", "*/*.onnx", "*/*.data",
-                        "*/source.spm", "*/vocab.json", "README.md",
-                        "LICENSE"],
+        commit_message="offline_translate: model card",
+        allow_patterns=["README.md", "LICENSE"],
     )
+
+    if failed_pairs:
+        print(f"\nuploaded: {', '.join(uploaded) or 'nothing'}", file=sys.stderr)
+        raise SystemExit(
+            f"failed after 3 attempts: {', '.join(failed_pairs)}. Re-run to "
+            "retry — directions already uploaded are skipped by the Hub.")
     print(f"\ndone: https://huggingface.co/{args.repo}")
     if args.repo == ap.get_default("repo"):
         print("use  HttpModelSource.official()")
